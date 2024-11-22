@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.10)
 project(VolumeRenderer)
 
+# Add OpenVDB Library
+find_package(OpenVDB REQUIRED)
+
 # Add Basalt submodule
 add_subdirectory(external/Basalt)
 
