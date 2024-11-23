@@ -1,11 +1,17 @@
 cmake_minimum_required(VERSION 3.10)
 project(VolumeRenderer)
 
+# Add Basalt submodule
+add_subdirectory(external/Basalt)
+
 # Add OpenVDB Library
 find_package(OpenVDB REQUIRED)
 
-# Add Basalt submodule
-add_subdirectory(external/Basalt)
+# Find other packages (excluding GLM)
+find_package(glfw3 REQUIRED)
+find_package(stb REQUIRED)
+find_package(assimp REQUIRED)
+find_package(Vulkan REQUIRED)
 
 # Add Shader directory
 add_subdirectory(shaders)
@@ -25,8 +31,12 @@ set(SOURCES
 # Create executable
 add_executable(VolumeRenderer ${SOURCES})
 
-# Link Basalt library
-target_link_libraries(VolumeRenderer PRIVATE Basalt)
+# Define GLM interface library manually
+add_library(glm INTERFACE)
+target_include_directories(glm INTERFACE ${VCPKG_ROOT}/installed/x64-windows/include)
+
+# Link Basalt library and GLM interface
+target_link_libraries(VolumeRenderer PRIVATE Basalt glm)
 
 # Set C++ standard
 set_target_properties(VolumeRenderer PROPERTIES
