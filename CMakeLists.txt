@@ -29,7 +29,7 @@ set(SOURCES
 )
 
 # Create executable
-add_executable(VolumeRenderer ${SOURCES})
+add_executable(VolumeRenderer ${SOURCES} "include/ray_tracing_pipeline.h" "src/ray_tracing_pipeline.cpp" )
 
 # Define GLM interface library manually
 add_library(glm INTERFACE)

@@ -1,0 +1,73 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_GOOGLE_include_directive : require
+
+// Include NanoVDB GLSL headers
+#include "nanovdb_sampler.glsl"
+
+layout(set = 0, binding = 0) buffer NanoVDBGrid {
+    uint nanoVDBData[]; // Adjust the type if necessary
+};
+
+layout(set = 0, binding = 1, rgba32f) uniform writeonly image2D outputImage;
+
+void main() {
+    // Get launch dimensions
+    ivec2 launchID = ivec2(gl_LaunchIDEXT.xy);
+    ivec2 launchSize = ivec2(gl_LaunchSizeEXT.xy);
+
+    // Compute normalized device coordinates (NDC)
+    vec2 ndc = (vec2(launchID) + vec2(0.5)) / vec2(launchSize) * 2.0 - 1.0;
+
+    // Camera parameters
+    vec3 cameraPosition = vec3(0.0, 0.0, -3.0);
+    vec3 cameraTarget = vec3(0.0, 0.0, 0.0);
+    vec3 upVector = vec3(0.0, 1.0, 0.0);
+    float fov = radians(45.0);
+
+    // Compute camera basis vectors
+    vec3 forward = normalize(cameraTarget - cameraPosition);
+    vec3 right = normalize(cross(forward, upVector));
+    vec3 up = cross(right, forward);
+
+    // Compute aspect ratio
+    float aspectRatio = float(launchSize.x) / float(launchSize.y);
+
+    // Compute ray direction
+    float px = ndc.x * aspectRatio * tan(fov * 0.5);
+    float py = ndc.y * tan(fov * 0.5);
+    vec3 rayDirection = normalize(forward + px * right + py * up);
+
+    // Initialize variables for ray marching
+    float t = 0.0;
+    float tEnd = 6.0;
+    float dt = 0.01;
+    vec3 rayPos;
+    float density;
+    vec3 color = vec3(0.0);
+    float transmittance = 1.0;
+
+    // Initialize NanoVDB sampler
+    NanoVDBSampler sampler;
+    nanoVdbInit(sampler, nanoVDBData);
+
+    // Ray marching loop
+    for (; t < tEnd; t += dt) {
+        rayPos = cameraPosition + t * rayDirection;
+        density = nanoVdbSample(sampler, rayPos);
+
+        // Simple emission-absorption model
+        float absorption = density * dt;
+        vec3 sampleColor = vec3(1.0, 0.5, 0.2); // Adjust color as needed
+        color += transmittance * sampleColor * absorption;
+        transmittance *= exp(-absorption);
+
+        // Early termination if fully opaque
+        if (transmittance < 0.01) {
+            break;
+        }
+    }
+
+    // Write the result to the output image
+    imageStore(outputImage, launchID, vec4(color, 1.0));
+}
