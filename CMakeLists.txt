@@ -1,4 +1,17 @@
-cmake_minimum_required(VERSION 3.10)
+# CMakeLists.txt (Main Project)
+cmake_minimum_required(VERSION 3.20)
+
+# Enable NanoVDB and set OpenVDB to build as shared libraries before defining the project
+set(USE_NANOVDB ON CACHE BOOL "Enable NanoVDB" FORCE)
+set(OPENVDB_BUILD_CORE_STATIC OFF CACHE BOOL "Build OpenVDB core as shared library" FORCE)
+set(BUILD_SHARED_LIBS ON CACHE BOOL "Build shared libraries" FORCE)
+
+# Set CMake policies
+if(POLICY CMP0146)
+    cmake_policy(SET CMP0146 NEW)
+endif()
+
+# Define the project and specify languages
 project(VolumeRenderer LANGUAGES CXX CUDA)
 
 # Add submodules
@@ -7,10 +20,9 @@ add_subdirectory(external/openvdb)
 
 # Find other packages (excluding GLM)
 find_package(glfw3 REQUIRED)
-find_package(stb REQUIRED)
+# find_package(stb REQUIRED) # Uncomment if needed
 find_package(assimp REQUIRED)
 find_package(Vulkan REQUIRED)
-find_package(CUDA REQUIRED)
 find_package(CUDAToolkit REQUIRED)
 find_package(TBB CONFIG REQUIRED)
 
@@ -35,7 +47,7 @@ set(SOURCES
 # Create executable
 add_executable(VolumeRenderer ${SOURCES})
 
-# Fix openvdb nanovdb compatibility issues
+# Fix OpenVDB NanoVDB compatibility issues
 target_compile_definitions(VolumeRenderer PRIVATE NANOVDB_USE_OPENVDB)
 
 # Define GLM interface library manually
@@ -52,5 +64,22 @@ set_target_properties(VolumeRenderer PROPERTIES
     CXX_EXTENSIONS NO
 )
 
+# Add compiler flags for Visual Studio to handle large templates and object files
+if(MSVC)
+    target_compile_options(VolumeRenderer PRIVATE /Zm200 /bigobj)
+endif()
+
+# Add post-build commands to copy runtime DLLs
+if(MSVC)
+    add_custom_command(TARGET VolumeRenderer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:VolumeRenderer>
+            $<TARGET_FILE_DIR:VolumeRenderer>
+        COMMAND_EXPAND_LISTS
+    )
+    # Ensure that the runtime dependencies are copied correctly
+    set_property(TARGET VolumeRenderer PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/out/build/x64-debug")
+endif()
+
 # Add subexecutables
-#add_subdirectory(tests)
+# add_subdirectory(tests)

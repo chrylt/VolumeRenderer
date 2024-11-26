@@ -194,7 +194,7 @@ void VolumeApp::initVulkan() {
 
 
 void VolumeApp::loadVolumeData() {
-    /*
+    
     // Initialize OpenVDB
     openvdb::initialize();
 
@@ -228,8 +228,6 @@ void VolumeApp::loadVolumeData() {
         throw std::runtime_error("Failed to allocate memory for NanoVDB data!");
     }
     memcpy(nanoVDBData, nanoGridHandle.data(), nanoVDBDataSize);
-    */
-    // only temporary!!
 }
 
 void VolumeApp::createVolumeBuffer() {
