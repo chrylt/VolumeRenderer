@@ -59,6 +59,7 @@ void RayTracingPipeline::createShaderModules() {
 }
 
 void RayTracingPipeline::createPipeline() {
+    /*
     // Set up shader stages
     std::vector<VkPipelineShaderStageCreateInfo> shaderStages;
 
@@ -129,6 +130,7 @@ void RayTracingPipeline::createPipeline() {
     if (vkCreateRayTracingPipelinesKHR(device.getDevice(), VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create ray tracing pipeline!");
     }
+    */
 }
 
 

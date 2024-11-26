@@ -20,12 +20,11 @@
 #include "sync_objects.h"
 #include "utils.h"
 
-
 #include "openvdb/openvdb.h"
-#include "openvdb/Grid.h"
-
-#include <nanovdb/util/Util.h>
-#include <nanovdb/tools/CreateNanoGrid.h>
+#include "nanovdb/NanoVDB.h"
+#include "nanovdb/HostBuffer.h"
+//#include "nanovdb/GridHandle.h"
+#include "nanovdb/tools/CreateNanoGrid.h"
 
 // Constants for window dimensions
 constexpr uint32_t WIDTH = 800;
@@ -37,7 +36,7 @@ constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 // Paths to compiled shader modules
 const std::string RAYGEN_SHADER_PATH = "shaders/compiled_shaders/raygen.rgen.spv";
 const std::string MISS_SHADER_PATH = "shaders/compiled_shaders/miss.rmiss.spv";
-const std::string TEST_VOUME_PATH = "../../../resources/bunny_cloud.vdb";
+const std::string TEST_VOLUME_PATH = "../../../resources/bunny_cloud.vdb";
 
 // Function to align sizes
 inline uint32_t alignedSize(uint32_t value, uint32_t alignment) {
@@ -193,28 +192,44 @@ void VolumeApp::initVulkan() {
     createSyncObjects();
 }
 
+
 void VolumeApp::loadVolumeData() {
+    /*
+    // Initialize OpenVDB
     openvdb::initialize();
 
-    // Load the OpenVDB grid
-    openvdb::io::File file(TEST_VOUME_PATH); // Update with your VDB file path
+    // Open the VDB file
+    openvdb::io::File file(TEST_VOLUME_PATH);
     file.open();
-    openvdb::GridBase::Ptr baseGrid = file.readGrid("density"); // Use the name of your grid
+
+    // Retrieve the first grid name from the file
+    auto nameIter = file.beginName();
+    if (nameIter == file.endName()) {
+        throw std::runtime_error("No grids found in the VDB file!");
+    }
+
+    // Read the grid using its name
+    auto baseGrid = file.readGrid(nameIter.gridName());
     file.close();
 
-    // Ensure the grid is of the correct type (e.g., FloatGrid)
-    openvdb::FloatGrid::Ptr floatGrid = openvdb::gridPtrCast<openvdb::FloatGrid>(baseGrid);
+    // Cast to FloatGrid (or the appropriate grid type)
+    auto floatGrid = openvdb::gridPtrCast<openvdb::FloatGrid>(baseGrid);
     if (!floatGrid) {
         throw std::runtime_error("Failed to cast grid to FloatGrid!");
     }
 
-    // Use the NanoVDB API to convert OpenVDB grid to NanoVDB grid
-    nanovdb::GridHandle<nanovdb::HostBuffer> nanoGridHandle = nanovdb::tools::createNanoGrid(*floatGrid);
+    // Convert OpenVDB grid to NanoVDB grid
+    auto nanoGridHandle = nanovdb::tools::createNanoGrid(*floatGrid);
 
     // Store NanoVDB data
     nanoVDBDataSize = nanoGridHandle.size();
     nanoVDBData = malloc(nanoVDBDataSize);
+    if (!nanoVDBData) {
+        throw std::runtime_error("Failed to allocate memory for NanoVDB data!");
+    }
     memcpy(nanoVDBData, nanoGridHandle.data(), nanoVDBDataSize);
+    */
+    // only temporary!!
 }
 
 void VolumeApp::createVolumeBuffer() {
@@ -382,14 +397,18 @@ void VolumeApp::createDescriptorSets() {
 }
 
 void VolumeApp::createRayTracingPipeline() {
+    /*
     // Load shader modules
     basalt::ShaderModule raygenShaderModule(*device, RAYGEN_SHADER_PATH);
+    basalt::ShaderModule missShaderModule(*device, MISS_SHADER_PATH);
 
     VkShaderModule raygenShader = raygenShaderModule.getShaderModule();
+    VkShaderModule missShader = missShaderModule.getShaderModule();
 
     // Set up shader stages
     std::vector<VkPipelineShaderStageCreateInfo> shaderStages;
 
+    // Raygen shader
     VkPipelineShaderStageCreateInfo raygenShaderStageInfo{};
     raygenShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     raygenShaderStageInfo.stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
@@ -397,9 +416,18 @@ void VolumeApp::createRayTracingPipeline() {
     raygenShaderStageInfo.pName = "main";
     shaderStages.push_back(raygenShaderStageInfo);
 
+    // Miss shader
+    VkPipelineShaderStageCreateInfo missShaderStageInfo{};
+    missShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    missShaderStageInfo.stage = VK_SHADER_STAGE_MISS_BIT_KHR;
+    missShaderStageInfo.module = missShader;
+    missShaderStageInfo.pName = "main";
+    shaderStages.push_back(missShaderStageInfo);
+
     // Set up shader groups
     std::vector<VkRayTracingShaderGroupCreateInfoKHR> shaderGroups;
 
+    // Raygen group
     VkRayTracingShaderGroupCreateInfoKHR raygenGroup{};
     raygenGroup.sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
     raygenGroup.type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
@@ -409,11 +437,22 @@ void VolumeApp::createRayTracingPipeline() {
     raygenGroup.intersectionShader = VK_SHADER_UNUSED_KHR;
     shaderGroups.push_back(raygenGroup);
 
-    // Create pipeline layout
+    // Miss group
+    VkRayTracingShaderGroupCreateInfoKHR missGroup{};
+    missGroup.sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
+    missGroup.type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+    missGroup.generalShader = 1; // Index of miss shader
+    missGroup.closestHitShader = VK_SHADER_UNUSED_KHR;
+    missGroup.anyHitShader = VK_SHADER_UNUSED_KHR;
+    missGroup.intersectionShader = VK_SHADER_UNUSED_KHR;
+    shaderGroups.push_back(missGroup);
+
+    // Create pipeline layout with descriptor set layouts
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = 1;
     pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
+    // Add push constants here if needed
 
     if (vkCreatePipelineLayout(device->getDevice(), &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create pipeline layout!");
@@ -432,9 +471,11 @@ void VolumeApp::createRayTracingPipeline() {
     if (vkCreateRayTracingPipelinesKHR(device->getDevice(), VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &rayTracingPipeline) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create ray tracing pipeline!");
     }
+    */
 }
 
 void VolumeApp::createShaderBindingTable() {
+    /*
     const uint32_t groupCount = 2; // Number of shader groups
     const uint32_t handleSize = device->getRayTracingProperties().shaderGroupHandleSize;
 
@@ -483,6 +524,8 @@ void VolumeApp::createShaderBindingTable() {
     vkMapMemory(device->getDevice(), shaderBindingTableMemory, 0, shaderBindingTableSize, 0, &data);
     memcpy(data, shaderHandleStorage.data(), shaderBindingTableSize);
     vkUnmapMemory(device->getDevice(), shaderBindingTableMemory);
+    */
+    // only temporary!
 }
 
 void VolumeApp::createCommandBuffers() {
@@ -504,6 +547,7 @@ void VolumeApp::createCommandBuffers() {
 }
 
 void VolumeApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
+    /*
     // Begin command buffer
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -703,6 +747,8 @@ void VolumeApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imag
     if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
         throw std::runtime_error("Failed to record command buffer!");
     }
+    */
+    // temp!
 }
 
 void VolumeApp::createSyncObjects() {

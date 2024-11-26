@@ -1,3 +1,6 @@
 [submodule "external/Basalt"]
 	path = external/Basalt
 	url = https://github.com/chrylt/Basalt.git
+[submodule "external/openvdb"]
+	path = external/openvdb
+	url = https://github.com/AcademySoftwareFoundation/openvdb.git

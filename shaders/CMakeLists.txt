@@ -7,9 +7,6 @@ file(MAKE_DIRECTORY ${SPIRV_OUTPUT_DIR})
 # Clear any existing SPIR-V files in the list (to prevent duplicates)
 set(SPIRV_FILES)
 
-
-
-
 # Define the include directory for NanoVDB GLSL headers
 #set(NANOVDB_GLSL_INCLUDE_DIR "path/to/nanovdb/glsl")
 #${VCPKG_ROOT}/installed/x64-windows/include
@@ -69,7 +66,7 @@ function(compile_shaders shader_dir output_dir)
             COMMAND ${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE}
                     -V --target-env vulkan1.2
                     -S ${SHADER_STAGE_FLAG}
-                    -I${NANOVDB_GLSL_INCLUDE_DIR}
+                    #-I${NANOVDB_GLSL_INCLUDE_DIR}
                     -o ${SPIRV_OUTPUT}
                     ${SHADER_FILE}
             DEPENDS ${SHADER_FILE}
