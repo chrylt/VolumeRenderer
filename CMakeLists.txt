@@ -1,4 +1,3 @@
-# CMakeLists.txt (Main Project)
 cmake_minimum_required(VERSION 3.20)
 
 # Enable NanoVDB and set OpenVDB to build as shared libraries before defining the project
@@ -40,8 +39,6 @@ include_directories(
 # Source files
 set(SOURCES
     src/main.cpp
-    include/ray_tracing_pipeline.h
-    src/ray_tracing_pipeline.cpp
 )
 
 # Create executable
@@ -81,5 +78,3 @@ if(MSVC)
     set_property(TARGET VolumeRenderer PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/out/build/x64-debug")
 endif()
 
-# Add subexecutables
-# add_subdirectory(tests)
