@@ -14,34 +14,26 @@
 #include "openvdb/tools/LevelSetSphere.h"
 
 struct Ray {
-    openvdb::Vec3d origin;
-    openvdb::Vec3d direction;
-};
-
-struct Ray_nano {
     nanovdb::Vec3d origin;
     nanovdb::Vec3d direction;
 };
 
-double raymarch(const Ray& ray, openvdb::FloatGrid::Ptr grid, const Ray_nano& ray_nano, nanovdb::NanoGrid<float>* grid_nano) {
+double raymarch(const Ray& ray_nano, nanovdb::NanoGrid<float>* grid) {
     // Simple raymarching function with fixed step size
     const double tMax = 1200.0; // Maximum distance to march
     const double dt = 1.0;     // Step size
     double t = 0.0;            // Current distance along the ray
     double density = 0.0;      // Accumulated density
 
-    openvdb::FloatGrid::ConstAccessor accessor = grid->getConstAccessor();
-    auto accessor_nano = grid_nano->tree().getAccessor();
+    auto accessor = grid->tree().getAccessor();
 
     while (t < tMax) {
-        openvdb::Vec3d position = ray.origin + t * ray.direction;
-        openvdb::Coord ijk = openvdb::Coord::floor(position);
 
         nanovdb::Vec3d position_nano = ray_nano.origin + t * ray_nano.direction;
         nanovdb::Coord ijk_nano = nanovdb::Coord::Floor(position_nano);
 
         //float value = accessor.getValue(ijk);
-        float value = accessor_nano.getValue(ijk_nano);
+        float value = accessor.getValue(ijk_nano);
 
         density += value * dt;
 
@@ -63,43 +55,41 @@ int main() {
         file.open();
     }
     catch (const openvdb::IoError& e) {
-        std::cerr << "Error opening file " << filename << ": " << e.what() << std::endl;
+        std::cerr << "Error opening file " << filename << ": " << e.what() << '\n';
         return 1;
     }
 
     // Read the first FloatGrid from the file
-    openvdb::GridBase::Ptr baseGrid;
-    openvdb::FloatGrid::Ptr grid;
+    openvdb::GridBase::Ptr baseGrid_openvdb;
+    openvdb::FloatGrid::Ptr grid_openvdb;
 
     for (openvdb::io::File::NameIterator nameIter = file.beginName();
         nameIter != file.endName(); ++nameIter) {
-        baseGrid = file.readGrid(nameIter.gridName());
-        grid = openvdb::gridPtrCast<openvdb::FloatGrid>(baseGrid);
-        if (grid) {
-            std::cout << "Loaded grid: " << nameIter.gridName() << std::endl;
+        baseGrid_openvdb = file.readGrid(nameIter.gridName());
+        grid_openvdb = openvdb::gridPtrCast<openvdb::FloatGrid>(baseGrid_openvdb);
+        if (grid_openvdb) {
+            std::cout << "Loaded grid: " << nameIter.gridName() << '\n';
             break;
         }
     }
 
     file.close();
 
-    if (!grid) {
-        std::cerr << "No FloatGrid found in " << filename << std::endl;
+    if (!grid_openvdb) {
+        std::cerr << "No FloatGrid found in " << filename << '\n';
         openvdb::uninitialize();
         return 1;
     }
 
     // Create nano test sphere
-    //nanovdb::GridHandle<> handle_nano = nanovdb::tools::createFogVolumeSphere<double>(100.0f, nanovdb::Vec3d(0.0), 1.0, 3.0, nanovdb::Vec3d(0.0), "sphere");
-    nanovdb::GridHandle<> handle_nano = nanovdb::tools::createNanoGrid(*grid);
-    nanovdb::NanoGrid<float>* grid_nano = handle_nano.grid<float>();
+    nanovdb::GridHandle<> handle = nanovdb::tools::createNanoGrid(*grid_openvdb);
+    nanovdb::NanoGrid<float>* grid = handle.grid<float>();
 
 
     // Set up the camera parameters
     const int width = 256;
     const int height = 256;
-    const openvdb::Vec3d cameraPos(0.0, 250.0, -800.0);
-    const nanovdb::Vec3d cameraPos_nano(0.0, 250.0, -800.0);
+    const nanovdb::Vec3d cameraPos(0.0, 250.0, -800.0);
     const double fov = 45.0; // Field of view in degrees
 
     // Allocate image buffer
@@ -117,14 +107,12 @@ int main() {
             double y = (1 - 2 * (j + 0.5) / height) * scale;
 
             // Compute ray direction
-            openvdb::Vec3d rayDir = openvdb::Vec3d(x, y, 1.0).unit();
-            nanovdb::Vec3d rayDir_nano = nanovdb::Vec3d(x, y, 1.0).normalize();
+            nanovdb::Vec3d rayDir = nanovdb::Vec3d(x, y, 1.0).normalize();
 
             Ray ray{ cameraPos, rayDir };
-            Ray_nano ray_nano{ cameraPos_nano, rayDir_nano };
 
             // Raymarch through the volume
-            double density = raymarch(ray, grid, ray_nano, grid_nano);
+            double density = raymarch(ray, grid);
 
             // Map density to color (simple grayscale)
             unsigned char color = static_cast<unsigned char>(std::min(density * 5.0, 255.0));
@@ -148,7 +136,7 @@ int main() {
     // Clean up OpenVDB
     openvdb::uninitialize();
 
-    std::cout << "Image saved to output.ppm" << std::endl;
+    std::cout << "Image saved to output.ppm" << '\n';
 
     return 0;
 }
