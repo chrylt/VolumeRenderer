@@ -28,6 +28,9 @@ find_package(TBB CONFIG REQUIRED)
 # Add Shader directory
 add_subdirectory(shaders)
 
+# Add CPU test
+add_subdirectory(CPU_test)
+
 # Include directories
 include_directories(
     ${CMAKE_SOURCE_DIR}/include
