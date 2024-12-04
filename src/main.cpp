@@ -83,7 +83,7 @@ int main() {
 
     // Create nano test sphere
     nanovdb::GridHandle<> handle = nanovdb::tools::createNanoGrid(*grid_openvdb);
-    nanovdb::NanoGrid<float>* grid = handle.grid<float>();
+    nanovdb::NanoGrid<float>* grid = handle.grid<float>(); // upload to GPU (as unsigned integer array) and interpret back later
 
 
     // Set up the camera parameters
