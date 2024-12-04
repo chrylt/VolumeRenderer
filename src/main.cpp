@@ -113,7 +113,7 @@ private:
 
     // Callback for framebuffer resize
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
-        auto app = reinterpret_cast<VolumeApp*>(glfwGetWindowUserPointer(window));
+	    const auto app = reinterpret_cast<VolumeApp*>(glfwGetWindowUserPointer(window));
         app->framebufferResized = true;
     }
 };
@@ -229,7 +229,7 @@ void VolumeApp::createDescriptorPoolAndSet() {
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = descriptorPool->getPool();
     allocInfo.descriptorSetCount = 1;
-    VkDescriptorSetLayout layout = descriptorSetLayout->getLayout();
+    const VkDescriptorSetLayout layout = descriptorSetLayout->getLayout();
     allocInfo.pSetLayouts = &layout;
 
     if (vkAllocateDescriptorSets(device->getDevice(), &allocInfo, &descriptorSet) != VK_SUCCESS) {
@@ -271,7 +271,7 @@ void VolumeApp::createDescriptorPoolAndSet() {
 void VolumeApp::createComputePipeline() {
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    VkDescriptorSetLayout layouts[] = { descriptorSetLayout->getLayout() };
+    const VkDescriptorSetLayout layouts[] = { descriptorSetLayout->getLayout() };
     pipelineLayoutInfo.setLayoutCount = 1;
     pipelineLayoutInfo.pSetLayouts = layouts;
 
@@ -308,7 +308,7 @@ void VolumeApp::createGraphicsPipeline() {
     // Create pipeline layout
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    VkDescriptorSetLayout layouts[] = { descriptorSetLayout->getLayout() };
+    const VkDescriptorSetLayout layouts[] = { descriptorSetLayout->getLayout() };
     pipelineLayoutInfo.setLayoutCount = 1;
     pipelineLayoutInfo.pSetLayouts = layouts;
 
@@ -347,8 +347,8 @@ void VolumeApp::createCommandBuffers() {
             nullptr);
 
         // Dispatch compute shader with workgroup size (16x16)
-        uint32_t groupCountX = (swapChain->getExtent().width + 15) / 16;
-        uint32_t groupCountY = (swapChain->getExtent().height + 15) / 16;
+        const uint32_t groupCountX = (swapChain->getExtent().width + 15) / 16;
+        const uint32_t groupCountY = (swapChain->getExtent().height + 15) / 16;
         vkCmdDispatch(*commandBuffers[i]->get(), groupCountX, groupCountY, 1);
 
         // Memory barrier to ensure compute shader writes are visible to the fragment shader
@@ -378,7 +378,7 @@ void VolumeApp::createCommandBuffers() {
             &barrier);
 
         // Begin render pass
-        VkClearValue clearColor = { {0.0f, 0.0f, 0.0f, 1.0f} };
+        const VkClearValue clearColor = { {0.0f, 0.0f, 0.0f, 1.0f} };
         commandBuffers[i]->beginRenderPass(renderPass->getRenderPass(), swapChain->getFramebuffers()[i], swapChain->getExtent(), clearColor);
 
         // Bind graphics pipeline
