@@ -66,11 +66,12 @@ function(compile_shaders shader_dir output_dir)
             COMMAND ${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE}
                     -V --target-env vulkan1.2
                     -S ${SHADER_STAGE_FLAG}
-                    #-I${NANOVDB_GLSL_INCLUDE_DIR}
                     -o ${SPIRV_OUTPUT}
                     ${SHADER_FILE}
             DEPENDS ${SHADER_FILE}
             COMMENT "Compiling ${SHADER_FILE} to SPIR-V"
+            VERBATIM
+            COMMAND_EXPAND_LISTS
         )
 
         list(APPEND SPIRV_FILES ${SPIRV_OUTPUT})
