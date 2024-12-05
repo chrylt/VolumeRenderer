@@ -1,4 +1,5 @@
-
+// has been modified to only include GLSL code by Christiane Kobalt
+// 
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,226 +25,24 @@
 // addressing mode
 // PNANOVDB_ADDRESS_32
 // PNANOVDB_ADDRESS_64
-#if defined(PNANOVDB_C)
-#ifndef PNANOVDB_ADDRESS_32
-#define PNANOVDB_ADDRESS_64
-#endif
-#elif defined(PNANOVDB_HLSL)
 #ifndef PNANOVDB_ADDRESS_64
 #define PNANOVDB_ADDRESS_32
-#endif
-#elif defined(PNANOVDB_GLSL)
-#ifndef PNANOVDB_ADDRESS_64
-#define PNANOVDB_ADDRESS_32
-#endif
 #endif
 
 // bounds checking
 //#define PNANOVDB_BUF_BOUNDS_CHECK
 
 // enable HDDA by default on HLSL/GLSL, make explicit on C
-#if defined(PNANOVDB_C)
-//#define PNANOVDB_HDDA
-#ifdef PNANOVDB_HDDA
-#ifndef PNANOVDB_CMATH
-#define PNANOVDB_CMATH
-#endif
-#endif
-#elif defined(PNANOVDB_HLSL)
 #define PNANOVDB_HDDA
-#elif defined(PNANOVDB_GLSL)
-#define PNANOVDB_HDDA
-#endif
-
-#ifdef PNANOVDB_CMATH
-#ifndef __CUDACC_RTC__
-#include <math.h>
-#endif
-#endif
 
 // ------------------------------------------------ Buffer -----------------------------------------------------------
 
 #if defined(PNANOVDB_BUF_CUSTOM)
 // NOP
-#elif defined(PNANOVDB_C)
-#define PNANOVDB_BUF_C
-#elif defined(PNANOVDB_HLSL)
-#define PNANOVDB_BUF_HLSL
 #elif defined(PNANOVDB_GLSL)
 #define PNANOVDB_BUF_GLSL
 #endif
 
-#if defined(PNANOVDB_BUF_C)
-#ifndef __CUDACC_RTC__
-#include <stdint.h>
-#endif
-#if defined(__CUDACC__)
-#define PNANOVDB_BUF_FORCE_INLINE static __host__ __device__ __forceinline__
-#elif defined(_WIN32)
-#define PNANOVDB_BUF_FORCE_INLINE static inline __forceinline
-#else
-#define PNANOVDB_BUF_FORCE_INLINE static inline __attribute__((always_inline))
-#endif
-typedef struct pnanovdb_buf_t
-{
-    uint32_t* data;
-#ifdef PNANOVDB_BUF_BOUNDS_CHECK
-    uint64_t size_in_words;
-#endif
-}pnanovdb_buf_t;
-PNANOVDB_BUF_FORCE_INLINE pnanovdb_buf_t pnanovdb_make_buf(uint32_t* data, uint64_t size_in_words)
-{
-    pnanovdb_buf_t ret;
-    ret.data = data;
-#ifdef PNANOVDB_BUF_BOUNDS_CHECK
-    ret.size_in_words = size_in_words;
-#endif
-    return ret;
-}
-#if defined(PNANOVDB_ADDRESS_32)
-PNANOVDB_BUF_FORCE_INLINE uint32_t pnanovdb_buf_read_uint32(pnanovdb_buf_t buf, uint32_t byte_offset)
-{
-    uint32_t wordaddress = (byte_offset >> 2u);
-#ifdef PNANOVDB_BUF_BOUNDS_CHECK
-    return wordaddress < buf.size_in_words ? buf.data[wordaddress] : 0u;
-#else
-    return buf.data[wordaddress];
-#endif
-}
-PNANOVDB_BUF_FORCE_INLINE uint64_t pnanovdb_buf_read_uint64(pnanovdb_buf_t buf, uint32_t byte_offset)
-{
-    uint64_t* data64 = (uint64_t*)buf.data;
-    uint32_t wordaddress64 = (byte_offset >> 3u);
-#ifdef PNANOVDB_BUF_BOUNDS_CHECK
-    uint64_t size_in_words64 = buf.size_in_words >> 1u;
-    return wordaddress64 < size_in_words64 ? data64[wordaddress64] : 0llu;
-#else
-    return data64[wordaddress64];
-#endif
-}
-PNANOVDB_BUF_FORCE_INLINE void pnanovdb_buf_write_uint32(pnanovdb_buf_t buf, uint32_t byte_offset, uint32_t value)
-{
-    uint32_t wordaddress = (byte_offset >> 2u);
-#ifdef PNANOVDB_BUF_BOUNDS_CHECK
-    if (wordaddress < buf.size_in_words)
-    {
-        buf.data[wordaddress] = value;
-}
-#else
-    buf.data[wordaddress] = value;
-#endif
-}
-PNANOVDB_BUF_FORCE_INLINE void pnanovdb_buf_write_uint64(pnanovdb_buf_t buf, uint32_t byte_offset, uint64_t value)
-{
-    uint64_t* data64 = (uint64_t*)buf.data;
-    uint32_t wordaddress64 = (byte_offset >> 3u);
-#ifdef PNANOVDB_BUF_BOUNDS_CHECK
-    uint64_t size_in_words64 = buf.size_in_words >> 1u;
-    if (wordaddress64 < size_in_words64)
-    {
-        data64[wordaddress64] = value;
-    }
-#else
-    data64[wordaddress64] = value;
-#endif
-}
-#elif defined(PNANOVDB_ADDRESS_64)
-PNANOVDB_BUF_FORCE_INLINE uint32_t pnanovdb_buf_read_uint32(pnanovdb_buf_t buf, uint64_t byte_offset)
-{
-    uint64_t wordaddress = (byte_offset >> 2u);
-#ifdef PNANOVDB_BUF_BOUNDS_CHECK
-    return wordaddress < buf.size_in_words ? buf.data[wordaddress] : 0u;
-#else
-    return buf.data[wordaddress];
-#endif
-}
-PNANOVDB_BUF_FORCE_INLINE uint64_t pnanovdb_buf_read_uint64(pnanovdb_buf_t buf, uint64_t byte_offset)
-{
-    uint64_t* data64 = (uint64_t*)buf.data;
-    uint64_t wordaddress64 = (byte_offset >> 3u);
-#ifdef PNANOVDB_BUF_BOUNDS_CHECK
-    uint64_t size_in_words64 = buf.size_in_words >> 1u;
-    return wordaddress64 < size_in_words64 ? data64[wordaddress64] : 0llu;
-#else
-    return data64[wordaddress64];
-#endif
-}
-PNANOVDB_BUF_FORCE_INLINE void pnanovdb_buf_write_uint32(pnanovdb_buf_t buf, uint64_t byte_offset, uint32_t value)
-{
-    uint64_t wordaddress = (byte_offset >> 2u);
-#ifdef PNANOVDB_BUF_BOUNDS_CHECK
-    if (wordaddress < buf.size_in_words)
-    {
-        buf.data[wordaddress] = value;
-    }
-#else
-    buf.data[wordaddress] = value;
-#endif
-}
-PNANOVDB_BUF_FORCE_INLINE void pnanovdb_buf_write_uint64(pnanovdb_buf_t buf, uint64_t byte_offset, uint64_t value)
-{
-    uint64_t* data64 = (uint64_t*)buf.data;
-    uint64_t wordaddress64 = (byte_offset >> 3u);
-#ifdef PNANOVDB_BUF_BOUNDS_CHECK
-    uint64_t size_in_words64 = buf.size_in_words >> 1u;
-    if (wordaddress64 < size_in_words64)
-    {
-        data64[wordaddress64] = value;
-    }
-#else
-    data64[wordaddress64] = value;
-#endif
-}
-#endif
-typedef uint32_t pnanovdb_grid_type_t;
-#define PNANOVDB_GRID_TYPE_GET(grid_typeIn, nameIn) pnanovdb_grid_type_constants[grid_typeIn].nameIn
-#elif defined(PNANOVDB_BUF_HLSL)
-#if defined(PNANOVDB_ADDRESS_32)
-#define pnanovdb_buf_t StructuredBuffer<uint>
-uint pnanovdb_buf_read_uint32(pnanovdb_buf_t buf, uint byte_offset)
-{
-    return buf[(byte_offset >> 2u)];
-}
-uint2 pnanovdb_buf_read_uint64(pnanovdb_buf_t buf, uint byte_offset)
-{
-    uint2 ret;
-    ret.x = pnanovdb_buf_read_uint32(buf, byte_offset + 0u);
-    ret.y = pnanovdb_buf_read_uint32(buf, byte_offset + 4u);
-    return ret;
-}
-void pnanovdb_buf_write_uint32(pnanovdb_buf_t buf, uint byte_offset, uint value)
-{
-    // NOP, by default no write in HLSL
-}
-void pnanovdb_buf_write_uint64(pnanovdb_buf_t buf, uint byte_offset, uint2 value)
-{
-    // NOP, by default no write in HLSL
-}
-#elif defined(PNANOVDB_ADDRESS_64)
-#define pnanovdb_buf_t StructuredBuffer<uint>
-uint pnanovdb_buf_read_uint32(pnanovdb_buf_t buf, uint64_t byte_offset)
-{
-    return buf[uint(byte_offset >> 2u)];
-}
-uint64_t pnanovdb_buf_read_uint64(pnanovdb_buf_t buf, uint64_t byte_offset)
-{
-    uint64_t ret;
-    ret = pnanovdb_buf_read_uint32(buf, byte_offset + 0u);
-    ret = ret + (uint64_t(pnanovdb_buf_read_uint32(buf, byte_offset + 4u)) << 32u);
-    return ret;
-}
-void pnanovdb_buf_write_uint32(pnanovdb_buf_t buf, uint64_t byte_offset, uint value)
-{
-    // NOP, by default no write in HLSL
-}
-void pnanovdb_buf_write_uint64(pnanovdb_buf_t buf, uint64_t byte_offset, uint64_t value)
-{
-    // NOP, by default no write in HLSL
-}
-#endif
-#define pnanovdb_grid_type_t uint
-#define PNANOVDB_GRID_TYPE_GET(grid_typeIn, nameIn) pnanovdb_grid_type_constants[grid_typeIn].nameIn
-#elif defined(PNANOVDB_BUF_GLSL)
 struct pnanovdb_buf_t
 {
     uint unused;    // to satisfy min struct size?
@@ -269,148 +68,21 @@ void pnanovdb_buf_write_uint64(pnanovdb_buf_t buf, uint byte_offset, uvec2 value
 }
 #define pnanovdb_grid_type_t uint
 #define PNANOVDB_GRID_TYPE_GET(grid_typeIn, nameIn) pnanovdb_grid_type_constants[grid_typeIn].nameIn
-#endif
 
 // ------------------------------------------------ Basic Types -----------------------------------------------------------
 
 // force inline
-#if defined(PNANOVDB_C)
-#if defined(__CUDACC__)
-#define PNANOVDB_FORCE_INLINE static __host__ __device__ __forceinline__
-#elif defined(_WIN32)
-#define PNANOVDB_FORCE_INLINE static inline __forceinline
-#else
-#define PNANOVDB_FORCE_INLINE static inline __attribute__((always_inline))
-#endif
-#elif defined(PNANOVDB_HLSL)
 #define PNANOVDB_FORCE_INLINE
-#elif defined(PNANOVDB_GLSL)
-#define PNANOVDB_FORCE_INLINE
-#endif
 
 // struct typedef, static const, inout
-#if defined(PNANOVDB_C)
-#define PNANOVDB_STRUCT_TYPEDEF(X) typedef struct X X;
-#if defined(__CUDA_ARCH__)
-#define PNANOVDB_STATIC_CONST constexpr __constant__
-#else
-#define PNANOVDB_STATIC_CONST static const
-#endif
-#define PNANOVDB_INOUT(X) X*
-#define PNANOVDB_IN(X) const X*
-#define PNANOVDB_DEREF(X) (*X)
-#define PNANOVDB_REF(X) &X
-#elif defined(PNANOVDB_HLSL)
-#define PNANOVDB_STRUCT_TYPEDEF(X)
-#define PNANOVDB_STATIC_CONST static const
-#define PNANOVDB_INOUT(X) inout X
-#define PNANOVDB_IN(X) X
-#define PNANOVDB_DEREF(X) X
-#define PNANOVDB_REF(X) X
-#elif defined(PNANOVDB_GLSL)
 #define PNANOVDB_STRUCT_TYPEDEF(X)
 #define PNANOVDB_STATIC_CONST const
 #define PNANOVDB_INOUT(X) inout X
 #define PNANOVDB_IN(X) X
 #define PNANOVDB_DEREF(X) X
 #define PNANOVDB_REF(X) X
-#endif
 
 // basic types, type conversion
-#if defined(PNANOVDB_C)
-#define PNANOVDB_NATIVE_64
-#ifndef __CUDACC_RTC__
-#include <stdint.h>
-#endif
-#if !defined(PNANOVDB_MEMCPY_CUSTOM)
-#ifndef __CUDACC_RTC__
-#include <string.h>
-#endif
-#define pnanovdb_memcpy memcpy
-#endif
-typedef uint32_t pnanovdb_uint32_t;
-typedef int32_t pnanovdb_int32_t;
-typedef int32_t pnanovdb_bool_t;
-#define PNANOVDB_FALSE 0
-#define PNANOVDB_TRUE 1
-typedef uint64_t pnanovdb_uint64_t;
-typedef int64_t pnanovdb_int64_t;
-typedef struct pnanovdb_coord_t
-{
-    pnanovdb_int32_t x, y, z;
-}pnanovdb_coord_t;
-typedef struct pnanovdb_vec3_t
-{
-    float x, y, z;
-}pnanovdb_vec3_t;
-PNANOVDB_FORCE_INLINE pnanovdb_int32_t pnanovdb_uint32_as_int32(pnanovdb_uint32_t v) { return (pnanovdb_int32_t)v; }
-PNANOVDB_FORCE_INLINE pnanovdb_int64_t pnanovdb_uint64_as_int64(pnanovdb_uint64_t v) { return (pnanovdb_int64_t)v; }
-PNANOVDB_FORCE_INLINE pnanovdb_uint64_t pnanovdb_int64_as_uint64(pnanovdb_int64_t v) { return (pnanovdb_uint64_t)v; }
-PNANOVDB_FORCE_INLINE pnanovdb_uint32_t pnanovdb_int32_as_uint32(pnanovdb_int32_t v) { return (pnanovdb_uint32_t)v; }
-PNANOVDB_FORCE_INLINE float pnanovdb_uint32_as_float(pnanovdb_uint32_t v) { float vf; pnanovdb_memcpy(&vf, &v, sizeof(vf)); return vf; }
-PNANOVDB_FORCE_INLINE pnanovdb_uint32_t pnanovdb_float_as_uint32(float v) { return *((pnanovdb_uint32_t*)(&v)); }
-PNANOVDB_FORCE_INLINE double pnanovdb_uint64_as_double(pnanovdb_uint64_t v) { double vf; pnanovdb_memcpy(&vf, &v, sizeof(vf)); return vf; }
-PNANOVDB_FORCE_INLINE pnanovdb_uint64_t pnanovdb_double_as_uint64(double v) { return *((pnanovdb_uint64_t*)(&v)); }
-PNANOVDB_FORCE_INLINE pnanovdb_uint32_t pnanovdb_uint64_low(pnanovdb_uint64_t v) { return (pnanovdb_uint32_t)v; }
-PNANOVDB_FORCE_INLINE pnanovdb_uint32_t pnanovdb_uint64_high(pnanovdb_uint64_t v) { return (pnanovdb_uint32_t)(v >> 32u); }
-PNANOVDB_FORCE_INLINE pnanovdb_uint64_t pnanovdb_uint32_as_uint64(pnanovdb_uint32_t x, pnanovdb_uint32_t y) { return ((pnanovdb_uint64_t)x) | (((pnanovdb_uint64_t)y) << 32u); }
-PNANOVDB_FORCE_INLINE pnanovdb_uint64_t pnanovdb_uint32_as_uint64_low(pnanovdb_uint32_t x) { return ((pnanovdb_uint64_t)x); }
-PNANOVDB_FORCE_INLINE pnanovdb_int32_t pnanovdb_uint64_is_equal(pnanovdb_uint64_t a, pnanovdb_uint64_t b) { return a == b; }
-PNANOVDB_FORCE_INLINE pnanovdb_int32_t pnanovdb_int64_is_zero(pnanovdb_int64_t a) { return a == 0; }
-#ifdef PNANOVDB_CMATH
-PNANOVDB_FORCE_INLINE float pnanovdb_floor(float v) { return floorf(v); }
-#endif
-PNANOVDB_FORCE_INLINE pnanovdb_int32_t pnanovdb_float_to_int32(float v) { return (pnanovdb_int32_t)v; }
-PNANOVDB_FORCE_INLINE float pnanovdb_int32_to_float(pnanovdb_int32_t v) { return (float)v; }
-PNANOVDB_FORCE_INLINE float pnanovdb_uint32_to_float(pnanovdb_uint32_t v) { return (float)v; }
-PNANOVDB_FORCE_INLINE float pnanovdb_min(float a, float b) { return a < b ? a : b; }
-PNANOVDB_FORCE_INLINE float pnanovdb_max(float a, float b) { return a > b ? a : b; }
-#elif defined(PNANOVDB_HLSL)
-typedef uint pnanovdb_uint32_t;
-typedef int pnanovdb_int32_t;
-typedef bool pnanovdb_bool_t;
-#define PNANOVDB_FALSE false
-#define PNANOVDB_TRUE true
-typedef int3 pnanovdb_coord_t;
-typedef float3 pnanovdb_vec3_t;
-pnanovdb_int32_t pnanovdb_uint32_as_int32(pnanovdb_uint32_t v) { return int(v); }
-pnanovdb_uint32_t pnanovdb_int32_as_uint32(pnanovdb_int32_t v) { return uint(v); }
-float pnanovdb_uint32_as_float(pnanovdb_uint32_t v) { return asfloat(v); }
-pnanovdb_uint32_t pnanovdb_float_as_uint32(float v) { return asuint(v); }
-float pnanovdb_floor(float v) { return floor(v); }
-pnanovdb_int32_t pnanovdb_float_to_int32(float v) { return int(v); }
-float pnanovdb_int32_to_float(pnanovdb_int32_t v) { return float(v); }
-float pnanovdb_uint32_to_float(pnanovdb_uint32_t v) { return float(v); }
-float pnanovdb_min(float a, float b) { return min(a, b); }
-float pnanovdb_max(float a, float b) { return max(a, b); }
-#if defined(PNANOVDB_ADDRESS_32)
-typedef uint2 pnanovdb_uint64_t;
-typedef int2 pnanovdb_int64_t;
-pnanovdb_int64_t pnanovdb_uint64_as_int64(pnanovdb_uint64_t v) { return int2(v); }
-pnanovdb_uint64_t pnanovdb_int64_as_uint64(pnanovdb_int64_t v) { return uint2(v); }
-double pnanovdb_uint64_as_double(pnanovdb_uint64_t v) { return asdouble(v.x, v.y); }
-pnanovdb_uint64_t pnanovdb_double_as_uint64(double v) { uint2 ret; asuint(v, ret.x, ret.y); return ret; }
-pnanovdb_uint32_t pnanovdb_uint64_low(pnanovdb_uint64_t v) { return v.x; }
-pnanovdb_uint32_t pnanovdb_uint64_high(pnanovdb_uint64_t v) { return v.y; }
-pnanovdb_uint64_t pnanovdb_uint32_as_uint64(pnanovdb_uint32_t x, pnanovdb_uint32_t y) { return uint2(x, y); }
-pnanovdb_uint64_t pnanovdb_uint32_as_uint64_low(pnanovdb_uint32_t x) { return uint2(x, 0); }
-bool pnanovdb_uint64_is_equal(pnanovdb_uint64_t a, pnanovdb_uint64_t b) { return (a.x == b.x) && (a.y == b.y); }
-bool pnanovdb_int64_is_zero(pnanovdb_int64_t a) { return a.x == 0 && a.y == 0; }
-#else
-typedef uint64_t pnanovdb_uint64_t;
-typedef int64_t pnanovdb_int64_t;
-pnanovdb_int64_t pnanovdb_uint64_as_int64(pnanovdb_uint64_t v) { return int64_t(v); }
-pnanovdb_uint64_t pnanovdb_int64_as_uint64(pnanovdb_int64_t v) { return uint64_t(v); }
-double pnanovdb_uint64_as_double(pnanovdb_uint64_t v) { return asdouble(uint(v), uint(v >> 32u)); }
-pnanovdb_uint64_t pnanovdb_double_as_uint64(double v) { uint2 ret; asuint(v, ret.x, ret.y); return uint64_t(ret.x) + (uint64_t(ret.y) << 32u); }
-pnanovdb_uint32_t pnanovdb_uint64_low(pnanovdb_uint64_t v) { return uint(v); }
-pnanovdb_uint32_t pnanovdb_uint64_high(pnanovdb_uint64_t v) { return uint(v >> 32u); }
-pnanovdb_uint64_t pnanovdb_uint32_as_uint64(pnanovdb_uint32_t x, pnanovdb_uint32_t y) { return uint64_t(x) + (uint64_t(y) << 32u); }
-pnanovdb_uint64_t pnanovdb_uint32_as_uint64_low(pnanovdb_uint32_t x) { return uint64_t(x); }
-bool pnanovdb_uint64_is_equal(pnanovdb_uint64_t a, pnanovdb_uint64_t b) { return a == b; }
-bool pnanovdb_int64_is_zero(pnanovdb_int64_t a) { return a == 0; }
-#endif
-#elif defined(PNANOVDB_GLSL)
 #define pnanovdb_uint32_t uint
 #define pnanovdb_int32_t int
 #define pnanovdb_bool_t bool
@@ -440,103 +112,9 @@ float pnanovdb_int32_to_float(pnanovdb_int32_t v) { return float(v); }
 float pnanovdb_uint32_to_float(pnanovdb_uint32_t v) { return float(v); }
 float pnanovdb_min(float a, float b) { return min(a, b); }
 float pnanovdb_max(float a, float b) { return max(a, b); }
-#endif
 
 // ------------------------------------------------ Coord/Vec3 Utilties -----------------------------------------------------------
 
-#if defined(PNANOVDB_C)
-PNANOVDB_FORCE_INLINE pnanovdb_vec3_t pnanovdb_vec3_uniform(float a)
-{
-    pnanovdb_vec3_t v;
-    v.x = a;
-    v.y = a;
-    v.z = a;
-    return v;
-}
-PNANOVDB_FORCE_INLINE pnanovdb_vec3_t pnanovdb_vec3_add(const pnanovdb_vec3_t a, const pnanovdb_vec3_t b)
-{
-    pnanovdb_vec3_t v;
-    v.x = a.x + b.x;
-    v.y = a.y + b.y;
-    v.z = a.z + b.z;
-    return v;
-}
-PNANOVDB_FORCE_INLINE pnanovdb_vec3_t pnanovdb_vec3_sub(const pnanovdb_vec3_t a, const pnanovdb_vec3_t b)
-{
-    pnanovdb_vec3_t v;
-    v.x = a.x - b.x;
-    v.y = a.y - b.y;
-    v.z = a.z - b.z;
-    return v;
-}
-PNANOVDB_FORCE_INLINE pnanovdb_vec3_t pnanovdb_vec3_mul(const pnanovdb_vec3_t a, const pnanovdb_vec3_t b)
-{
-    pnanovdb_vec3_t v;
-    v.x = a.x * b.x;
-    v.y = a.y * b.y;
-    v.z = a.z * b.z;
-    return v;
-}
-PNANOVDB_FORCE_INLINE pnanovdb_vec3_t pnanovdb_vec3_div(const pnanovdb_vec3_t a, const pnanovdb_vec3_t b)
-{
-    pnanovdb_vec3_t v;
-    v.x = a.x / b.x;
-    v.y = a.y / b.y;
-    v.z = a.z / b.z;
-    return v;
-}
-PNANOVDB_FORCE_INLINE pnanovdb_vec3_t pnanovdb_vec3_min(const pnanovdb_vec3_t a, const pnanovdb_vec3_t b)
-{
-    pnanovdb_vec3_t v;
-    v.x = a.x < b.x ? a.x : b.x;
-    v.y = a.y < b.y ? a.y : b.y;
-    v.z = a.z < b.z ? a.z : b.z;
-    return v;
-}
-PNANOVDB_FORCE_INLINE pnanovdb_vec3_t pnanovdb_vec3_max(const pnanovdb_vec3_t a, const pnanovdb_vec3_t b)
-{
-    pnanovdb_vec3_t v;
-    v.x = a.x > b.x ? a.x : b.x;
-    v.y = a.y > b.y ? a.y : b.y;
-    v.z = a.z > b.z ? a.z : b.z;
-    return v;
-}
-PNANOVDB_FORCE_INLINE pnanovdb_vec3_t pnanovdb_coord_to_vec3(const pnanovdb_coord_t coord)
-{
-    pnanovdb_vec3_t v;
-    v.x = pnanovdb_int32_to_float(coord.x);
-    v.y = pnanovdb_int32_to_float(coord.y);
-    v.z = pnanovdb_int32_to_float(coord.z);
-    return v;
-}
-PNANOVDB_FORCE_INLINE pnanovdb_coord_t pnanovdb_coord_uniform(const pnanovdb_int32_t a)
-{
-    pnanovdb_coord_t v;
-    v.x = a;
-    v.y = a;
-    v.z = a;
-    return v;
-}
-PNANOVDB_FORCE_INLINE pnanovdb_coord_t pnanovdb_coord_add(pnanovdb_coord_t a, pnanovdb_coord_t b)
-{
-    pnanovdb_coord_t v;
-    v.x = a.x + b.x;
-    v.y = a.y + b.y;
-    v.z = a.z + b.z;
-    return v;
-}
-#elif defined(PNANOVDB_HLSL)
-pnanovdb_vec3_t pnanovdb_vec3_uniform(float a) { return float3(a, a, a); }
-pnanovdb_vec3_t pnanovdb_vec3_add(pnanovdb_vec3_t a, pnanovdb_vec3_t b) { return a + b; }
-pnanovdb_vec3_t pnanovdb_vec3_sub(pnanovdb_vec3_t a, pnanovdb_vec3_t b) { return a - b; }
-pnanovdb_vec3_t pnanovdb_vec3_mul(pnanovdb_vec3_t a, pnanovdb_vec3_t b) { return a * b; }
-pnanovdb_vec3_t pnanovdb_vec3_div(pnanovdb_vec3_t a, pnanovdb_vec3_t b) { return a / b; }
-pnanovdb_vec3_t pnanovdb_vec3_min(pnanovdb_vec3_t a, pnanovdb_vec3_t b) { return min(a, b); }
-pnanovdb_vec3_t pnanovdb_vec3_max(pnanovdb_vec3_t a, pnanovdb_vec3_t b) { return max(a, b); }
-pnanovdb_vec3_t pnanovdb_coord_to_vec3(pnanovdb_coord_t coord) { return float3(coord); }
-pnanovdb_coord_t pnanovdb_coord_uniform(pnanovdb_int32_t a) { return int3(a, a, a); }
-pnanovdb_coord_t pnanovdb_coord_add(pnanovdb_coord_t a, pnanovdb_coord_t b) { return a + b; }
-#elif defined(PNANOVDB_GLSL)
 pnanovdb_vec3_t pnanovdb_vec3_uniform(float a) { return vec3(a, a, a); }
 pnanovdb_vec3_t pnanovdb_vec3_add(pnanovdb_vec3_t a, pnanovdb_vec3_t b) { return a + b; }
 pnanovdb_vec3_t pnanovdb_vec3_sub(pnanovdb_vec3_t a, pnanovdb_vec3_t b) { return a - b; }
@@ -547,28 +125,12 @@ pnanovdb_vec3_t pnanovdb_vec3_max(pnanovdb_vec3_t a, pnanovdb_vec3_t b) { return
 pnanovdb_vec3_t pnanovdb_coord_to_vec3(const pnanovdb_coord_t coord) { return vec3(coord); }
 pnanovdb_coord_t pnanovdb_coord_uniform(pnanovdb_int32_t a) { return ivec3(a, a, a); }
 pnanovdb_coord_t pnanovdb_coord_add(pnanovdb_coord_t a, pnanovdb_coord_t b) { return a + b; }
-#endif
 
 // ------------------------------------------------ Uint64 Utils -----------------------------------------------------------
 
 PNANOVDB_FORCE_INLINE pnanovdb_uint32_t pnanovdb_uint32_countbits(pnanovdb_uint32_t value)
 {
-#if defined(PNANOVDB_C)
-#if defined(_MSC_VER) && (_MSC_VER >= 1928) && defined(PNANOVDB_USE_INTRINSICS)
-    return __popcnt(value);
-#elif (defined(__GNUC__) || defined(__clang__)) && defined(PNANOVDB_USE_INTRINSICS)
-    return __builtin_popcount(value);
-#else
-    value = value - ((value >> 1) & 0x55555555);
-    value = (value & 0x33333333) + ((value >> 2) & 0x33333333);
-    value = (value + (value >> 4)) & 0x0F0F0F0F;
-    return (value * 0x01010101) >> 24;
-#endif
-#elif defined(PNANOVDB_HLSL)
-    return countbits(value);
-#elif defined(PNANOVDB_GLSL)
     return bitCount(value);
-#endif
 }
 
 PNANOVDB_FORCE_INLINE pnanovdb_uint32_t pnanovdb_uint64_countbits(pnanovdb_uint64_t value)
@@ -867,25 +429,11 @@ PNANOVDB_FORCE_INLINE pnanovdb_bool_t pnanovdb_read_bit(pnanovdb_buf_t buf, pnan
     return ((value_word >> bit_index) & 1) != 0u;
 }
 
-#if defined(PNANOVDB_C)
-PNANOVDB_FORCE_INLINE short pnanovdb_read_half(pnanovdb_buf_t buf, pnanovdb_address_t address)
-{
-    pnanovdb_uint32_t raw = pnanovdb_read_uint32(buf, address);
-    return (short)(raw >> (pnanovdb_address_mask(address, 2) << 3));
-}
-#elif defined(PNANOVDB_HLSL)
-PNANOVDB_FORCE_INLINE float pnanovdb_read_half(pnanovdb_buf_t buf, pnanovdb_address_t address)
-{
-    pnanovdb_uint32_t raw = pnanovdb_read_uint32(buf, address);
-    return f16tof32(raw >> (pnanovdb_address_mask(address, 2) << 3));
-}
-#elif defined(PNANOVDB_GLSL)
 PNANOVDB_FORCE_INLINE float pnanovdb_read_half(pnanovdb_buf_t buf, pnanovdb_address_t address)
 {
     pnanovdb_uint32_t raw = pnanovdb_read_uint32(buf, address);
     return unpackHalf2x16(raw >> (pnanovdb_address_mask(address, 2) << 3)).x;
 }
-#endif
 
 // ------------------------------------------------ High Level Buffer Write -----------------------------------------------------------
 
