@@ -9,6 +9,11 @@
 #include <vulkan/vulkan_core.h>
 #include <GLFW/glfw3.h>
 
+#include <openvdb/openvdb.h>
+#include <nanovdb/NanoVDB.h>
+#include <nanovdb/io/IO.h>
+#include <nanovdb/tools/CreatePrimitives.h>
+
 #include "buffer.h"
 #include "command_buffer.h"
 #include "command_pool.h"
@@ -74,6 +79,9 @@ private:
     VkImageView storageImageView;
     VkSampler sampler;
 
+    // NanoVDB
+    std::unique_ptr<basalt::Buffer> nanoVDBBuffer;
+
     // Pipelines
     VkPipelineLayout graphicsPipelineLayout;
     VkPipelineLayout computePipelineLayout;
@@ -96,6 +104,7 @@ private:
     void createCommandBuffers();
     void createSyncObjects();
     void createSampler();
+    void createNanoVDBBuffer();
 
     // Rendering loop
     void mainLoop();
@@ -143,6 +152,7 @@ void VolumeApp::initVulkan() {
     renderPass = std::make_unique<basalt::RenderPass>(*device, swapChain->getImageFormat());
     commandPool = std::make_unique<basalt::CommandPool>(*device, device->getGraphicsQueueFamilyIndex());
 
+    createNanoVDBBuffer();
     createStorageImage();
     createSampler();
     createDescriptorSetLayout();
@@ -211,7 +221,19 @@ void VolumeApp::createDescriptorSetLayout() {
     samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     samplerLayoutBinding.pImmutableSamplers = nullptr;
 
-    std::vector<VkDescriptorSetLayoutBinding> bindings = { storageImageLayoutBinding, samplerLayoutBinding };
+    // Binding 2: Storage buffer for NanoVDB grid
+    VkDescriptorSetLayoutBinding storageBufferLayoutBinding{};
+    storageBufferLayoutBinding.binding = 2;
+    storageBufferLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    storageBufferLayoutBinding.descriptorCount = 1;
+    storageBufferLayoutBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    storageBufferLayoutBinding.pImmutableSamplers = nullptr;
+
+    std::vector<VkDescriptorSetLayoutBinding> bindings = {
+        storageImageLayoutBinding,
+        samplerLayoutBinding,
+        storageBufferLayoutBinding
+    };
 
     descriptorSetLayout = std::make_unique<basalt::DescriptorSetLayout>(*device, bindings);
 }
@@ -220,7 +242,8 @@ void VolumeApp::createDescriptorSetLayout() {
 void VolumeApp::createDescriptorPoolAndSet() {
     std::vector<VkDescriptorPoolSize> poolSizes = {
         { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 },
-        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 }
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 },
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1 }
     };
 
     descriptorPool = std::make_unique<basalt::DescriptorPool>(*device, 1, poolSizes);
@@ -237,7 +260,7 @@ void VolumeApp::createDescriptorPoolAndSet() {
     }
 
     // Update descriptor set
-    std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+    std::array<VkWriteDescriptorSet, 3> descriptorWrites{};
 
     // Binding 0: Storage image
     VkDescriptorImageInfo storageImageInfo{};
@@ -264,6 +287,19 @@ void VolumeApp::createDescriptorPoolAndSet() {
     descriptorWrites[1].descriptorCount = 1;
     descriptorWrites[1].pImageInfo = &samplerImageInfo;
 
+    // Binding 2: Storage buffer
+    VkDescriptorBufferInfo bufferInfo{};
+    bufferInfo.buffer = nanoVDBBuffer->getBuffer();
+    bufferInfo.offset = 0;
+    bufferInfo.range = VK_WHOLE_SIZE;
+
+    descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[2].dstSet = descriptorSet;
+    descriptorWrites[2].dstBinding = 2;
+    descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptorWrites[2].descriptorCount = 1;
+    descriptorWrites[2].pBufferInfo = &bufferInfo;
+
     vkUpdateDescriptorSets(device->getDevice(), static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
 }
 
@@ -271,6 +307,7 @@ void VolumeApp::createDescriptorPoolAndSet() {
 void VolumeApp::createComputePipeline() {
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+
     const VkDescriptorSetLayout layouts[] = { descriptorSetLayout->getLayout() };
     pipelineLayoutInfo.setLayoutCount = 1;
     pipelineLayoutInfo.pSetLayouts = layouts;
@@ -483,7 +520,7 @@ void VolumeApp::recreateSwapChain() {
 void VolumeApp::updateDescriptorSet() const
 {
     // Update descriptor set
-    std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+    std::array<VkWriteDescriptorSet, 3> descriptorWrites{};
 
     // Binding 0: Storage image
     VkDescriptorImageInfo storageImageInfo{};
@@ -510,7 +547,21 @@ void VolumeApp::updateDescriptorSet() const
     descriptorWrites[1].descriptorCount = 1;
     descriptorWrites[1].pImageInfo = &samplerImageInfo;
 
+    // Binding 2: Storage buffer
+    VkDescriptorBufferInfo bufferInfo{};
+    bufferInfo.buffer = nanoVDBBuffer->getBuffer();
+    bufferInfo.offset = 0;
+    bufferInfo.range = VK_WHOLE_SIZE;
+
+    descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[2].dstSet = descriptorSet;
+    descriptorWrites[2].dstBinding = 2;
+    descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptorWrites[2].descriptorCount = 1;
+    descriptorWrites[2].pBufferInfo = &bufferInfo;
+
     vkUpdateDescriptorSets(device->getDevice(), static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+
 }
 
 
@@ -576,6 +627,9 @@ void VolumeApp::cleanup() {
     // Destroy the storage image
     storageImage.reset();
 
+    // Destroy nanoVDB buffer
+    nanoVDBBuffer.reset();
+
     // Cleanup swap chain and other resources
     cleanupSwapChain();
 
@@ -598,6 +652,80 @@ void VolumeApp::cleanup() {
     // Destroy window and terminate GLFW
     glfwDestroyWindow(window);
     glfwTerminate();
+}
+
+void VolumeApp::createNanoVDBBuffer() {
+    // Initialize OpenVDB
+    openvdb::initialize();
+
+    // Specify the VDB file to read
+    const std::string filename = "../../../../resources/bunny_cloud.vdb";
+
+    // Open the VDB file
+    openvdb::io::File file(filename);
+    try {
+        file.open();
+    }
+    catch (const openvdb::IoError& e) {
+        std::cerr << "Error opening file " << filename << ": " << e.what() << '\n';
+        throw std::runtime_error("Failed to open VDB file.");
+    }
+
+    // Read the first FloatGrid from the file
+    openvdb::GridBase::Ptr baseGrid_openvdb;
+    openvdb::FloatGrid::Ptr grid_openvdb;
+
+    for (openvdb::io::File::NameIterator nameIter = file.beginName();
+        nameIter != file.endName(); ++nameIter) {
+        baseGrid_openvdb = file.readGrid(nameIter.gridName());
+        grid_openvdb = openvdb::gridPtrCast<openvdb::FloatGrid>(baseGrid_openvdb);
+        if (grid_openvdb) {
+            std::cout << "Loaded grid: " << nameIter.gridName() << '\n';
+            break;
+        }
+    }
+
+    file.close();
+
+    if (!grid_openvdb) {
+        std::cerr << "No FloatGrid found in " << filename << '\n';
+        openvdb::uninitialize();
+        throw std::runtime_error("Failed to find FloatGrid in VDB file.");
+    }
+
+    // Create NanoVDB grid handle
+    nanovdb::GridHandle<> handle = nanovdb::tools::createNanoGrid(*grid_openvdb);
+
+    // Get the data and size
+    const void* gridData = handle.data();
+    const size_t gridSize = handle.size();
+
+    // Create Vulkan buffer
+    VkDeviceSize bufferSize = static_cast<VkDeviceSize>(gridSize);
+
+    // Create a buffer with usage VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+    nanoVDBBuffer = std::make_unique<basalt::Buffer>(
+        *device,
+        bufferSize,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    // Create a staging buffer to transfer data to device local memory
+    const basalt::Buffer stagingBuffer(
+        *device,
+        bufferSize,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    // Copy data to the staging buffer
+    stagingBuffer.updateBuffer(*commandPool, gridData, bufferSize);
+
+    // Copy from staging buffer to device local buffer
+    basalt::utils::copyBuffer(*device, *commandPool, device->getGraphicsQueue(),
+        stagingBuffer.getBuffer(), nanoVDBBuffer->getBuffer(), bufferSize);
+
+    // Clean up OpenVDB
+    openvdb::uninitialize();
 }
 
 
