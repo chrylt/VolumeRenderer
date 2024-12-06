@@ -137,7 +137,7 @@ void main() {
             }
             t += stepSize;
         }
-    }   // doesn't hit because no sign change in float grid
+    }
 
     vec4 color = vec4(u, v, 0.5, 1.0);
 
