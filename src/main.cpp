@@ -1,4 +1,3 @@
-// main.cpp
 #include <array>
 #include <iostream>
 #include <stdexcept>
@@ -31,8 +30,8 @@
 #include "utils.h"
 
 // Constants for window dimensions
-constexpr uint32_t WIDTH = 800;
-constexpr uint32_t HEIGHT = 600;
+constexpr uint32_t WIDTH = 256;
+constexpr uint32_t HEIGHT = 256;
 
 // Maximum number of frames that can be processed concurrently
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;

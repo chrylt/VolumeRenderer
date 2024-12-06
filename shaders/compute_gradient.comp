@@ -1,24 +1,97 @@
 #version 450
 #extension GL_GOOGLE_include_directive : enable
 
+#define M_PI       3.14159265358979323846   // pi
+
 layout(binding = 2) readonly buffer NanoVDBBuffer {
-    uint pnanovdb_buf_data[];
+    uint pnanovdb_buf_data[]; // uint array == volumeBuffer
 };
 
 #include "PNanoVDB_GLSL.h"
+
+pnanovdb_buf_t discarded = {0};   
+// Explaination: It appears as if they wanted to keep the functions parameter 
+// list the same between HLSL and GLSL. But since reinterpreting is not possible 
+// in GLSL, sometimes you need to give a pnanovdb_buf_t as an argument, which is 
+// not actually used in the GLSL version of the methods. Instead the GLSL version 
+// directly accesses the variable named pnanovdb_buf_data as an array.
 
 layout (local_size_x = 16, local_size_y = 16) in;
 
 layout (binding = 0, rgba8) uniform writeonly image2D img;
 
+pnanovdb_uint32_t gridType;
+pnanovdb_readaccessor_t accessor;
+pnanovdb_grid_handle_t gridHandle;
+
+struct Ray{
+    vec3 origin;
+    vec3 direction;
+    float t_hit;
+    float t_value;
+    float minDistance;
+    float maxDistance;
+};
+
+void initNanoVolume(){  // Source: Masterarbeit
+    pnanovdb_address_t address;
+    address.byte_offset = 0;
+    gridHandle.address = address;
+
+    //create handles for accessor and gridType
+    pnanovdb_tree_handle_t treeHandle = pnanovdb_grid_get_tree(discarded, gridHandle);
+    pnanovdb_root_handle_t rootHandle = pnanovdb_tree_get_root(discarded, treeHandle);
+    
+    // create objects of volume
+    pnanovdb_readaccessor_init(accessor, rootHandle);
+    // could be set as a constant for better compiler optimization
+    // if the type is fix
+    gridType = pnanovdb_grid_get_grid_type(discarded, gridHandle);
+}
+
 void main() {
+    initNanoVolume();
+
     ivec2 pixelCoords = ivec2(gl_GlobalInvocationID.xy);
     ivec2 imageSize = imageSize(img);
 
     float u = float(pixelCoords.x) / float(imageSize.x);
     float v = float(pixelCoords.y) / float(imageSize.y);
 
+    // Set up the camera parameters
+    int width = 256;
+    int height = 256;
+    vec3 cameraPos = vec3(0.0, 250.0, -800.0);
+    float fov = 45.0; // Field of view in degrees
+
+    // Precompute camera parameters
+    float aspectRatio = float(width) / height;
+    float scale = tan(fov * 0.5 * M_PI / 180.0);
+
+    // Normalize pixel coordinates to [-1, 1]
+    float x = (2 * (pixelCoords.x + 0.5) / width - 1); //* aspectRatio * scale;
+    float y = (1 - 2 * (pixelCoords.y + 0.5) / height);// * scale;
+
+    Ray ray;
+    ray.origin = cameraPos;
+    ray.direction = normalize(vec3(x, y, 1.0));;
+    ray.t_hit = 0; // blank
+    ray.t_value = 0; // blank
+    ray.minDistance = 0;
+    ray.maxDistance = 1200.0;
+
+    bool hit = pnanovdb_hdda_zero_crossing(gridType,
+    discarded, accessor, ray.origin, ray.minDistance,
+    ray.direction, ray.maxDistance, ray.t_hit, ray.t_value);    // doesn't hit because no sign change in float grid
+
     vec4 color = vec4(u, v, 0.5, 1.0);
+
+    if (hit) {
+        color = vec4(0.0, 1.0, 0.0, 1.0);
+    }
+    else {
+        color = vec4(1.0, 0.0, 0.0, 1.0);
+    }
 
     imageStore(img, pixelCoords, color);
 }

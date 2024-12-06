@@ -42,14 +42,13 @@
 #elif defined(PNANOVDB_GLSL)
 #define PNANOVDB_BUF_GLSL
 #endif
-
 struct pnanovdb_buf_t
 {
     uint unused;    // to satisfy min struct size?
 };
 uint pnanovdb_buf_read_uint32(pnanovdb_buf_t buf, uint byte_offset)
 {
-    return pnanovdb_buf_data[(byte_offset >> 2u)]; // TODO: change for something that works
+    return pnanovdb_buf_data[(byte_offset >> 2u)];
 }
 uvec2 pnanovdb_buf_read_uint64(pnanovdb_buf_t buf, uint byte_offset)
 {
@@ -2898,7 +2897,7 @@ PNANOVDB_FORCE_INLINE pnanovdb_bool_t pnanovdb_hdda_zero_crossing(
     {
         return PNANOVDB_FALSE;
     }
-
+    
     pnanovdb_vec3_t pos = pnanovdb_hdda_ray_start(origin, tmin, direction);
     pnanovdb_coord_t ijk = pnanovdb_hdda_pos_to_ijk(PNANOVDB_REF(pos));
 
