@@ -27,8 +27,6 @@ pnanovdb_grid_handle_t gridHandle;
 struct Ray{
     vec3 origin;
     vec3 direction;
-    float t_hit;
-    float t_value;
     float minDistance;
     float maxDistance;
 };
@@ -47,6 +45,21 @@ void initNanoVolume(){  // Source: Masterarbeit
     // could be set as a constant for better compiler optimization
     // if the type is fix
     gridType = pnanovdb_grid_get_grid_type(discarded, gridHandle);
+}
+
+bool intersectAABB(vec3 origin, vec3 dir, vec3 boxMin, vec3 boxMax, inout float tmin, inout float tmax) {
+    for (int i = 0; i < 3; i++) {
+        float invD = 1.0 / dir[i];
+        float t0 = (boxMin[i] - origin[i]) * invD;
+        float t1 = (boxMax[i] - origin[i]) * invD;
+        if (invD < 0.0) {
+            float temp = t0; t0 = t1; t1 = temp;
+        }
+        tmin = max(tmin, t0);
+        tmax = min(tmax, t1);
+        if (tmax < tmin) return false;
+    }
+    return true;
 }
 
 void main() {
@@ -69,20 +82,62 @@ void main() {
     float scale = tan(fov * 0.5 * M_PI / 180.0);
 
     // Normalize pixel coordinates to [-1, 1]
-    float x = (2 * (pixelCoords.x + 0.5) / width - 1); //* aspectRatio * scale;
-    float y = (1 - 2 * (pixelCoords.y + 0.5) / height);// * scale;
+    float x = (2 * (pixelCoords.x + 0.5) / width - 1) * aspectRatio * scale;
+    float y = (1 - 2 * (pixelCoords.y + 0.5) / height) * scale;
 
     Ray ray;
     ray.origin = cameraPos;
-    ray.direction = normalize(vec3(x, y, 1.0));;
-    ray.t_hit = 0; // blank
-    ray.t_value = 0; // blank
+    ray.direction = normalize(vec3(x, y, 1.0));
     ray.minDistance = 0;
     ray.maxDistance = 1200.0;
 
-    bool hit = pnanovdb_hdda_zero_crossing(gridType,
-    discarded, accessor, ray.origin, ray.minDistance,
-    ray.direction, ray.maxDistance, ray.t_hit, ray.t_value);    // doesn't hit because no sign change in float grid
+    // Get bounding box from NanoVDB grid
+    pnanovdb_tree_handle_t tree = pnanovdb_grid_get_tree(discarded, gridHandle);
+    pnanovdb_root_handle_t root = pnanovdb_tree_get_root(discarded, tree);
+    pnanovdb_coord_t bboxMinI = pnanovdb_root_get_bbox_min(discarded, root);
+    pnanovdb_coord_t bboxMaxI = pnanovdb_root_get_bbox_max(discarded, root);
+
+    // Convert to float bounding box (voxel coordinates)
+    vec3 boxMin = vec3(bboxMinI.x, bboxMinI.y, bboxMinI.z);
+    vec3 boxMax = vec3(bboxMaxI.x + 1, bboxMaxI.y + 1, bboxMaxI.z + 1); // +1 because bbox is min inclusive, max exclusive
+
+    float tmin = ray.minDistance;
+    float tmax = ray.maxDistance;
+
+    bool hitVolume = intersectAABB(ray.origin, ray.direction, boxMin, boxMax, tmin, tmax);
+
+    bool hit = false;
+    if (hitVolume && tmax > 0.0) {
+        // Ensure we start inside the volume intersection region
+        tmin = max(tmin, 0.0);
+        
+        float stepSize = 1.0; // Adjust step size to your voxel scale
+        float t = tmin;
+
+        // Raymarch through the volume
+        while (t < tmax && !hit) {
+            vec3 p = ray.origin + ray.direction * t;
+            
+            // Convert world position to index space
+            pnanovdb_vec3_t pIndex = pnanovdb_grid_world_to_indexf(discarded, gridHandle, pnanovdb_vec3_t(p.x, p.y, p.z));
+            ivec3 ijk = ivec3(floor(pIndex.x), floor(pIndex.y), floor(pIndex.z));
+
+            // Check if inside the known bounding box of the grid
+            if (ijk.x >= bboxMinI.x && ijk.y >= bboxMinI.y && ijk.z >= bboxMinI.z &&
+                ijk.x <= bboxMaxI.x && ijk.y <= bboxMaxI.y && ijk.z <= bboxMaxI.z) {
+                
+                // Sample the voxel value
+                pnanovdb_address_t addr = pnanovdb_readaccessor_get_value_address(gridType, discarded, accessor, ijk);
+                float val = pnanovdb_read_float(discarded, addr);
+
+                // Define a hit criterion: e.g., val > 0
+                if (val > 0.0) {
+                    hit = true;
+                }
+            }
+            t += stepSize;
+        }
+    }   // doesn't hit because no sign change in float grid
 
     vec4 color = vec4(u, v, 0.5, 1.0);
 
