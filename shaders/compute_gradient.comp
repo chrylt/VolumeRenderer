@@ -14,14 +14,12 @@ pnanovdb_buf_t discarded = {0};
 layout (local_size_x = 16, local_size_y = 16) in;
 layout (binding = 0, rgba8) uniform writeonly image2D img;
 
-// Define a struct for point lights
 struct PointLight {
     vec3 position;
     float intensity;
 };
 
-// Example: define a few point lights here
-// In a real application, you'd pass this as a uniform array
+// Example lights in world space
 const int NUM_LIGHTS = 4;
 PointLight pointLights[NUM_LIGHTS] = PointLight[](
     PointLight(vec3(-10.0, 30.0, -50.0), 1000.0),
@@ -67,22 +65,15 @@ bool intersectAABB(vec3 origin, vec3 dir, vec3 boxMin, vec3 boxMax, inout float 
     return true;
 }
 
-// Compute light contribution from point lights at a given point.
-// For simplicity, no shadowing or medium attenuation to the light.
-vec3 computeLightContribution(vec3 samplePos) {
+vec3 computeLightContribution(vec3 sampleWorldPos) {
     vec3 totalLight = vec3(0.0);
     for (int i = 0; i < NUM_LIGHTS; i++) {
-        vec3 L = pointLights[i].position - samplePos;
+        vec3 L = pointLights[i].position - sampleWorldPos;
         float dist2 = dot(L, L);
+        if (dist2 < 0.0001) continue; // guard against division by zero
         float dist = sqrt(dist2);
-        vec3 Ldir = L / dist;
-        
-        // Simple distance attenuation:
         float attenuation = pointLights[i].intensity / (4.0 * M_PI * dist2);
-        
-        // If you want medium attenuation towards the light, you'd do it here.
-        
-        totalLight += attenuation * vec3(1.0); // white light assumed
+        totalLight += attenuation * vec3(1.0); // assuming white lights
     }
     return totalLight;
 }
@@ -96,7 +87,6 @@ void main() {
     float u = float(pixelCoords.x) / float(imageSize.x);
     float v = float(pixelCoords.y) / float(imageSize.y);
 
-    // Camera setup
     int width = 256;
     int height = 256;
     vec3 cameraPos = vec3(0.0, 20.0, -75.0);
@@ -110,10 +100,10 @@ void main() {
     Ray ray;
     ray.origin = cameraPos;
     ray.direction = normalize(vec3(x, y, 1.0));
-    ray.minDistance = 0;
+    ray.minDistance = 0.0;
     ray.maxDistance = 1200.0;
 
-    // Transform ray into volume local space
+    // Transform ray into local index space
     pnanovdb_vec3_t oIndex = pnanovdb_grid_world_to_indexf(discarded, gridHandle, pnanovdb_vec3_t(ray.origin.x, ray.origin.y, ray.origin.z));
     pnanovdb_vec3_t dIndex = pnanovdb_grid_world_to_index_dirf(discarded, gridHandle, pnanovdb_vec3_t(ray.direction.x, ray.direction.y, ray.direction.z));
     
@@ -131,7 +121,6 @@ void main() {
 
     float tmin = ray.minDistance;
     float tmax = ray.maxDistance;
-
     bool hitVolume = intersectAABB(rayOriginLocal, rayDirLocal, boxMin, boxMax, tmin, tmax);
 
     vec3 finalColor = vec3(0.0);
@@ -140,12 +129,15 @@ void main() {
         float stepSize = 1.0;
         float t = tmin;
         
-        // Keep track of transmittance along the ray
-        float T = 1.0;
-        float absorptionCoefficient = 1.0; // simple assumption
+        float T = 1.0; // transmittance
+        float absorptionCoefficient = 1.0;
 
         while (t < tmax && T > 0.001) {
             vec3 pLocal = rayOriginLocal + rayDirLocal * t;
+            
+            // Convert pLocal back to world space for correct lighting calculations
+            pnanovdb_vec3_t pWorldNano = pnanovdb_grid_index_to_worldf(discarded, gridHandle, pnanovdb_vec3_t(pLocal.x, pLocal.y, pLocal.z));
+            vec3 pWorld = vec3(pWorldNano.x, pWorldNano.y, pWorldNano.z);
 
             ivec3 ijk = ivec3(floor(pLocal.x), floor(pLocal.y), floor(pLocal.z));
 
@@ -155,17 +147,12 @@ void main() {
                 pnanovdb_address_t addr = pnanovdb_readaccessor_get_value_address(gridType, discarded, accessor, ijk);
                 float val = pnanovdb_read_float(discarded, addr);
 
-                // Compute local light contribution
-                vec3 lightIncoming = computeLightContribution(pLocal);
+                // Compute incoming light at this point in world space
+                vec3 lightIncoming = computeLightContribution(pWorld);
 
-                // The scattering contribution at this point:
-                // dC = T * val * stepSize * lightIncoming
                 vec3 dC = T * val * stepSize * lightIncoming;
-
-                // Accumulate
                 finalColor += dC;
 
-                // Update transmittance
                 float attenuation = exp(-val * absorptionCoefficient * stepSize);
                 T *= attenuation;
             }
@@ -174,9 +161,7 @@ void main() {
         }
     }
 
-    // Map finalColor to [0,1] range as needed, or just clamp.
     vec3 displayedColor = clamp(finalColor, 0.0, 1.0);
-
     vec4 color = vec4(displayedColor, 1.0);
     imageStore(img, pixelCoords, color);
 }
