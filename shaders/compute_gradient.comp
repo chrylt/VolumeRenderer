@@ -1,49 +1,54 @@
 #version 450
 #extension GL_GOOGLE_include_directive : enable
 
-#define M_PI       3.14159265358979323846   // pi
+#define M_PI       3.14159265358979323846
 
 layout(binding = 2) readonly buffer NanoVDBBuffer {
-    uint pnanovdb_buf_data[]; // uint array == volumeBuffer
+    uint pnanovdb_buf_data[];
 };
 
 #include "PNanoVDB_GLSL.h"
 
 pnanovdb_buf_t discarded = {0};   
-// Explaination: It appears as if they wanted to keep the functions parameter 
-// list the same between HLSL and GLSL. But since reinterpreting is not possible 
-// in GLSL, sometimes you need to give a pnanovdb_buf_t as an argument, which is 
-// not actually used in the GLSL version of the methods. Instead the GLSL version 
-// directly accesses the variable named pnanovdb_buf_data as an array.
 
 layout (local_size_x = 16, local_size_y = 16) in;
-
 layout (binding = 0, rgba8) uniform writeonly image2D img;
+
+// Define a struct for point lights
+struct PointLight {
+    vec3 position;
+    float intensity;
+};
+
+// Example: define a few point lights here
+// In a real application, you'd pass this as a uniform array
+const int NUM_LIGHTS = 4;
+PointLight pointLights[NUM_LIGHTS] = PointLight[](
+    PointLight(vec3(-10.0, 30.0, -50.0), 1000.0),
+    PointLight(vec3(20.0, 25.0, -30.0), 500.0),
+    PointLight(vec3(-30.0, 30.0, -10.0), 1000.0),
+    PointLight(vec3(40.0, 25.0, -20.0), 500.0)
+);
 
 pnanovdb_uint32_t gridType;
 pnanovdb_readaccessor_t accessor;
 pnanovdb_grid_handle_t gridHandle;
 
-struct Ray{
+struct Ray {
     vec3 origin;
     vec3 direction;
     float minDistance;
     float maxDistance;
 };
 
-void initNanoVolume(){  // Source: Masterarbeit
+void initNanoVolume() {
     pnanovdb_address_t address;
     address.byte_offset = 0;
     gridHandle.address = address;
 
-    //create handles for accessor and gridType
     pnanovdb_tree_handle_t treeHandle = pnanovdb_grid_get_tree(discarded, gridHandle);
     pnanovdb_root_handle_t rootHandle = pnanovdb_tree_get_root(discarded, treeHandle);
-    
-    // create objects of volume
     pnanovdb_readaccessor_init(accessor, rootHandle);
-    // could be set as a constant for better compiler optimization
-    // if the type is fix
     gridType = pnanovdb_grid_get_grid_type(discarded, gridHandle);
 }
 
@@ -62,6 +67,26 @@ bool intersectAABB(vec3 origin, vec3 dir, vec3 boxMin, vec3 boxMax, inout float 
     return true;
 }
 
+// Compute light contribution from point lights at a given point.
+// For simplicity, no shadowing or medium attenuation to the light.
+vec3 computeLightContribution(vec3 samplePos) {
+    vec3 totalLight = vec3(0.0);
+    for (int i = 0; i < NUM_LIGHTS; i++) {
+        vec3 L = pointLights[i].position - samplePos;
+        float dist2 = dot(L, L);
+        float dist = sqrt(dist2);
+        vec3 Ldir = L / dist;
+        
+        // Simple distance attenuation:
+        float attenuation = pointLights[i].intensity / (4.0 * M_PI * dist2);
+        
+        // If you want medium attenuation towards the light, you'd do it here.
+        
+        totalLight += attenuation * vec3(1.0); // white light assumed
+    }
+    return totalLight;
+}
+
 void main() {
     initNanoVolume();
 
@@ -71,17 +96,14 @@ void main() {
     float u = float(pixelCoords.x) / float(imageSize.x);
     float v = float(pixelCoords.y) / float(imageSize.y);
 
-    // Set up the camera parameters
+    // Camera setup
     int width = 256;
     int height = 256;
     vec3 cameraPos = vec3(0.0, 20.0, -75.0);
-    float fov = 45.0; // Field of view in degrees
-
-    // Precompute camera parameters
-    float aspectRatio = float(width) / height;
+    float fov = 45.0;
+    float aspectRatio = float(width) / float(height);
     float scale = tan(fov * 0.5 * M_PI / 180.0);
 
-    // Normalize pixel coordinates to [-1, 1]
     float x = (2 * (pixelCoords.x + 0.5) / width - 1) * aspectRatio * scale;
     float y = (1 - 2 * (pixelCoords.y + 0.5) / height) * scale;
 
@@ -91,15 +113,13 @@ void main() {
     ray.minDistance = 0;
     ray.maxDistance = 1200.0;
 
-    // Convert ray to volume’s local (index) space
-    // Uses the NanoVDB grid transform to do correct scaling
+    // Transform ray into volume local space
     pnanovdb_vec3_t oIndex = pnanovdb_grid_world_to_indexf(discarded, gridHandle, pnanovdb_vec3_t(ray.origin.x, ray.origin.y, ray.origin.z));
     pnanovdb_vec3_t dIndex = pnanovdb_grid_world_to_index_dirf(discarded, gridHandle, pnanovdb_vec3_t(ray.direction.x, ray.direction.y, ray.direction.z));
     
     vec3 rayOriginLocal = vec3(oIndex.x, oIndex.y, oIndex.z);
-    vec3 rayDirLocal = vec3(dIndex.x, dIndex.y, dIndex.z);
+    vec3 rayDirLocal = normalize(vec3(dIndex.x, dIndex.y, dIndex.z));
 
-    // Get bounding box in voxel coordinates (already local)
     pnanovdb_tree_handle_t tree = pnanovdb_grid_get_tree(discarded, gridHandle);
     pnanovdb_root_handle_t root = pnanovdb_tree_get_root(discarded, tree);
 
@@ -107,40 +127,56 @@ void main() {
     pnanovdb_coord_t bboxMaxI = pnanovdb_root_get_bbox_max(discarded, root);
 
     vec3 boxMin = vec3(bboxMinI.x, bboxMinI.y, bboxMinI.z);
-    vec3 boxMax = vec3(bboxMaxI.x + 1, bboxMaxI.y + 1, bboxMaxI.z + 1); // +1 because bbox is min inclusive, max exclusive
+    vec3 boxMax = vec3(bboxMaxI.x + 1, bboxMaxI.y + 1, bboxMaxI.z + 1);
 
     float tmin = ray.minDistance;
     float tmax = ray.maxDistance;
 
     bool hitVolume = intersectAABB(rayOriginLocal, rayDirLocal, boxMin, boxMax, tmin, tmax);
 
-    float densitySum = 0.0;
+    vec3 finalColor = vec3(0.0);
     if (hitVolume && tmax > 0.0) {
         tmin = max(tmin, 0.0);
-        float stepSize = 0.5;
+        float stepSize = 1.0;
         float t = tmin;
+        
+        // Keep track of transmittance along the ray
+        float T = 1.0;
+        float absorptionCoefficient = 1.0; // simple assumption
 
-        while (t < tmax) {
+        while (t < tmax && T > 0.001) {
             vec3 pLocal = rayOriginLocal + rayDirLocal * t;
 
             ivec3 ijk = ivec3(floor(pLocal.x), floor(pLocal.y), floor(pLocal.z));
 
             if (ijk.x >= bboxMinI.x && ijk.y >= bboxMinI.y && ijk.z >= bboxMinI.z &&
                 ijk.x <= bboxMaxI.x && ijk.y <= bboxMaxI.y && ijk.z <= bboxMaxI.z) {
-                
+
                 pnanovdb_address_t addr = pnanovdb_readaccessor_get_value_address(gridType, discarded, accessor, ijk);
                 float val = pnanovdb_read_float(discarded, addr);
 
-                // Accumulate density
-                densitySum += val;
+                // Compute local light contribution
+                vec3 lightIncoming = computeLightContribution(pLocal);
+
+                // The scattering contribution at this point:
+                // dC = T * val * stepSize * lightIncoming
+                vec3 dC = T * val * stepSize * lightIncoming;
+
+                // Accumulate
+                finalColor += dC;
+
+                // Update transmittance
+                float attenuation = exp(-val * absorptionCoefficient * stepSize);
+                T *= attenuation;
             }
+
             t += stepSize;
         }
     }
 
-    float intensity = clamp(densitySum * 0.01, 0.0, 1.0);
+    // Map finalColor to [0,1] range as needed, or just clamp.
+    vec3 displayedColor = clamp(finalColor, 0.0, 1.0);
 
-    vec4 color = vec4(intensity, intensity, intensity, 1.0);
-
+    vec4 color = vec4(displayedColor, 1.0);
     imageStore(img, pixelCoords, color);
 }
