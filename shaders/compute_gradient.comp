@@ -114,13 +114,13 @@ void main() {
 
     bool hitVolume = intersectAABB(rayOriginLocal, rayDirLocal, boxMin, boxMax, tmin, tmax);
 
-    bool hit = false;
+    float densitySum = 0.0;
     if (hitVolume && tmax > 0.0) {
         tmin = max(tmin, 0.0);
-        float stepSize = 1.0;
+        float stepSize = 0.5;
         float t = tmin;
 
-        while (t < tmax && !hit) {
+        while (t < tmax) {
             vec3 pLocal = rayOriginLocal + rayDirLocal * t;
 
             ivec3 ijk = ivec3(floor(pLocal.x), floor(pLocal.y), floor(pLocal.z));
@@ -131,22 +131,16 @@ void main() {
                 pnanovdb_address_t addr = pnanovdb_readaccessor_get_value_address(gridType, discarded, accessor, ijk);
                 float val = pnanovdb_read_float(discarded, addr);
 
-                if (val > 0.0) {
-                    hit = true;
-                }
+                // Accumulate density
+                densitySum += val;
             }
             t += stepSize;
         }
     }
 
-    vec4 color = vec4(u, v, 0.5, 1.0);
+    float intensity = clamp(densitySum * 0.01, 0.0, 1.0);
 
-    if (hit) {
-        color = vec4(0.0, 1.0, 0.0, 1.0);
-    }
-    else {
-        color = vec4(1.0, 0.0, 0.0, 1.0);
-    }
+    vec4 color = vec4(intensity, intensity, intensity, 1.0);
 
     imageStore(img, pixelCoords, color);
 }
