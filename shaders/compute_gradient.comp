@@ -74,7 +74,7 @@ void main() {
     // Set up the camera parameters
     int width = 256;
     int height = 256;
-    vec3 cameraPos = vec3(0.0, 250.0, -800.0);
+    vec3 cameraPos = vec3(0.0, 20.0, -75.0);
     float fov = 45.0; // Field of view in degrees
 
     // Precompute camera parameters
@@ -116,7 +116,6 @@ void main() {
 
     bool hit = false;
     if (hitVolume && tmax > 0.0) {
-        hit = true;
         tmin = max(tmin, 0.0);
         float stepSize = 1.0;
         float t = tmin;
