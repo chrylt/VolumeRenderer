@@ -8,6 +8,8 @@
 #include <vulkan/vulkan_core.h>
 #include <GLFW/glfw3.h>
 
+#include <glm/vec3.hpp>
+
 #include <openvdb/openvdb.h>
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/io/IO.h>
@@ -37,9 +39,15 @@ constexpr uint32_t HEIGHT = 256;
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 // Paths to compiled shader modules
+const std::string LIGHT_GEN_PATH = "shaders/compiled_shaders/light_gen.comp.spv";
 const std::string COMPUTE_SHADER_PATH = "shaders/compiled_shaders/compute_gradient.comp.spv";
 const std::string VERT_SHADER_PATH = "shaders/compiled_shaders/fullscreen.vert.spv";
 const std::string FRAG_SHADER_PATH = "shaders/compiled_shaders/sample_image.frag.spv";
+
+struct PointLight {
+	glm::vec3 position;
+    float intensity;
+};
 
 class VolumeApp {
 public:
@@ -65,6 +73,7 @@ private:
     std::unique_ptr<basalt::RenderPass> renderPass;
     std::unique_ptr<basalt::GraphicsPipeline> graphicsPipeline;
     std::unique_ptr<basalt::ComputePipeline> computePipeline;
+    std::unique_ptr<basalt::ComputePipeline> lightGenPipeline;
     std::unique_ptr<basalt::CommandPool> commandPool;
     std::unique_ptr<basalt::SyncObjects> syncObjects;
 
@@ -80,10 +89,13 @@ private:
 
     // NanoVDB
     std::unique_ptr<basalt::Buffer> nanoVDBBuffer;
+    std::unique_ptr<basalt::Buffer> pointLightsBuffer;
+    std::unique_ptr<basalt::Buffer> lightCounterBuffer;
 
     // Pipelines
     VkPipelineLayout graphicsPipelineLayout;
     VkPipelineLayout computePipelineLayout;
+    VkPipelineLayout lightGenPipelineLayout;
 
     // Command buffers
     std::vector<std::unique_ptr<basalt::CommandBuffer>> commandBuffers;
@@ -96,8 +108,10 @@ private:
     void initWindow();
     void initVulkan();
     void createStorageImage();
+    void createLightBuffers();
     void createDescriptorSetLayout();
     void createDescriptorPoolAndSet();
+    void createLightGenPipeline();
     void createComputePipeline();
     void createGraphicsPipeline();
     void createCommandBuffers();
@@ -152,10 +166,12 @@ void VolumeApp::initVulkan() {
     commandPool = std::make_unique<basalt::CommandPool>(*device, device->getGraphicsQueueFamilyIndex());
 
     createNanoVDBBuffer();
+    createLightBuffers();
     createStorageImage();
     createSampler();
     createDescriptorSetLayout();
     createDescriptorPoolAndSet();
+    createLightGenPipeline();
     createComputePipeline();
     createGraphicsPipeline();
     swapChain->createFramebuffers(*renderPass);
@@ -203,6 +219,26 @@ void VolumeApp::createStorageImage() {
         VK_IMAGE_LAYOUT_GENERAL);
 }
 
+void VolumeApp::createLightBuffers()
+{
+    // Create a buffer for point lights
+    VkDeviceSize maxLights = 100000;
+    VkDeviceSize pointLightsBufferSize = sizeof(PointLight) * maxLights;
+    pointLightsBuffer = std::make_unique<basalt::Buffer>(
+        *device, pointLightsBufferSize,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+    );
+
+    // Buffer for the counter (uint)
+    VkDeviceSize counterBufferSize = sizeof(uint32_t);
+    lightCounterBuffer = std::make_unique<basalt::Buffer>(
+        *device, counterBufferSize,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+    );
+}
+
 void VolumeApp::createDescriptorSetLayout() {
     // Binding 0: Storage image for compute shader
     VkDescriptorSetLayoutBinding storageImageLayoutBinding{};
@@ -228,10 +264,26 @@ void VolumeApp::createDescriptorSetLayout() {
     storageBufferLayoutBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     storageBufferLayoutBinding.pImmutableSamplers = nullptr;
 
+    // Binding 3: Point lights buffer
+    VkDescriptorSetLayoutBinding pointLightsBinding{};
+    pointLightsBinding.binding = 3;
+    pointLightsBinding.descriptorCount = 1;
+    pointLightsBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    pointLightsBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    // Binding 4: Light counter buffer
+    VkDescriptorSetLayoutBinding lightCounterBinding{};
+    lightCounterBinding.binding = 4;
+    lightCounterBinding.descriptorCount = 1;
+    lightCounterBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    lightCounterBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
     std::vector<VkDescriptorSetLayoutBinding> bindings = {
         storageImageLayoutBinding,
         samplerLayoutBinding,
-        storageBufferLayoutBinding
+        storageBufferLayoutBinding,
+        pointLightsBinding,
+        lightCounterBinding
     };
 
     descriptorSetLayout = std::make_unique<basalt::DescriptorSetLayout>(*device, bindings);
@@ -242,7 +294,7 @@ void VolumeApp::createDescriptorPoolAndSet() {
     std::vector<VkDescriptorPoolSize> poolSizes = {
         { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 },
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 },
-        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1 }
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 }
     };
 
     descriptorPool = std::make_unique<basalt::DescriptorPool>(*device, 1, poolSizes);
@@ -258,50 +310,23 @@ void VolumeApp::createDescriptorPoolAndSet() {
         throw std::runtime_error("Failed to allocate descriptor set!");
     }
 
-    // Update descriptor set
-    std::array<VkWriteDescriptorSet, 3> descriptorWrites{};
-
-    // Binding 0: Storage image
-    VkDescriptorImageInfo storageImageInfo{};
-    storageImageInfo.imageView = storageImageView;
-    storageImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-    descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrites[0].dstSet = descriptorSet;
-    descriptorWrites[0].dstBinding = 0;
-    descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    descriptorWrites[0].descriptorCount = 1;
-    descriptorWrites[0].pImageInfo = &storageImageInfo;
-
-    // Binding 1: Combined image sampler
-    VkDescriptorImageInfo samplerImageInfo{};
-    samplerImageInfo.imageView = storageImageView;
-    samplerImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    samplerImageInfo.sampler = sampler;
-
-    descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrites[1].dstSet = descriptorSet;
-    descriptorWrites[1].dstBinding = 1;
-    descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    descriptorWrites[1].descriptorCount = 1;
-    descriptorWrites[1].pImageInfo = &samplerImageInfo;
-
-    // Binding 2: Storage buffer
-    VkDescriptorBufferInfo bufferInfo{};
-    bufferInfo.buffer = nanoVDBBuffer->getBuffer();
-    bufferInfo.offset = 0;
-    bufferInfo.range = VK_WHOLE_SIZE;
-
-    descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrites[2].dstSet = descriptorSet;
-    descriptorWrites[2].dstBinding = 2;
-    descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    descriptorWrites[2].descriptorCount = 1;
-    descriptorWrites[2].pBufferInfo = &bufferInfo;
-
-    vkUpdateDescriptorSets(device->getDevice(), static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+    updateDescriptorSet();
 }
 
+void VolumeApp::createLightGenPipeline() {
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+
+    const VkDescriptorSetLayout layouts[] = { descriptorSetLayout->getLayout() };
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = layouts;
+
+    if (vkCreatePipelineLayout(device->getDevice(), &pipelineLayoutInfo, nullptr, &lightGenPipelineLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create lightGen pipeline layout!");
+    }
+
+    lightGenPipeline = std::make_unique<basalt::ComputePipeline>(*device, LIGHT_GEN_PATH, lightGenPipelineLayout);
+}
 
 void VolumeApp::createComputePipeline() {
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
@@ -369,6 +394,48 @@ void VolumeApp::createCommandBuffers() {
         commandBuffers[i] = std::make_unique<basalt::CommandBuffer>(*device, *commandPool);
 
         commandBuffers[i]->begin(VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT);
+
+        // Reset the light counter to zero before running light_gen.
+        vkCmdFillBuffer(
+            *commandBuffers[i]->get(),
+            lightCounterBuffer->getBuffer(),
+            0,
+            sizeof(uint32_t),
+            0 // fill with zero
+        );
+
+        // Run the light_gen pipeline
+        vkCmdBindPipeline(*commandBuffers[i]->get(), VK_PIPELINE_BIND_POINT_COMPUTE, lightGenPipeline->getPipeline());
+        vkCmdBindDescriptorSets(
+            *commandBuffers[i]->get(),
+            VK_PIPELINE_BIND_POINT_COMPUTE,
+            lightGenPipelineLayout,
+            0,
+            1,
+            &descriptorSet,
+            0,
+            nullptr
+        );
+
+        // Dispatch enough threads for the photon simulation
+        vkCmdDispatch(*commandBuffers[i]->get(), 16, 16, 1);
+
+        // Barrier to ensure that the light data is visible to the next compute pass
+        VkMemoryBarrier memoryBarrier{};
+        memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        memoryBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        memoryBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+
+        vkCmdPipelineBarrier(
+            *commandBuffers[i]->get(),
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0,
+            1,
+            &memoryBarrier,
+            0, nullptr,
+            0, nullptr
+        );
 
         // Bind compute pipeline and dispatch
         vkCmdBindPipeline(*commandBuffers[i]->get(), VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline->getPipeline());
@@ -519,7 +586,7 @@ void VolumeApp::recreateSwapChain() {
 void VolumeApp::updateDescriptorSet() const
 {
     // Update descriptor set
-    std::array<VkWriteDescriptorSet, 3> descriptorWrites{};
+    std::array<VkWriteDescriptorSet, 5> descriptorWrites{};
 
     // Binding 0: Storage image
     VkDescriptorImageInfo storageImageInfo{};
@@ -559,6 +626,32 @@ void VolumeApp::updateDescriptorSet() const
     descriptorWrites[2].descriptorCount = 1;
     descriptorWrites[2].pBufferInfo = &bufferInfo;
 
+    // Binding 3: Point light buffer
+    VkDescriptorBufferInfo pointLightsBufferInfo{};
+    pointLightsBufferInfo.buffer = pointLightsBuffer->getBuffer();
+    pointLightsBufferInfo.offset = 0;
+    pointLightsBufferInfo.range = VK_WHOLE_SIZE;
+
+    descriptorWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[3].dstSet = descriptorSet;
+    descriptorWrites[3].dstBinding = 3;
+    descriptorWrites[3].descriptorCount = 1;
+    descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptorWrites[3].pBufferInfo = &pointLightsBufferInfo;
+
+    // Binding 4: Light count buffer
+    VkDescriptorBufferInfo lightCounterBufferInfo{};
+    lightCounterBufferInfo.buffer = lightCounterBuffer->getBuffer();
+    lightCounterBufferInfo.offset = 0;
+    lightCounterBufferInfo.range = VK_WHOLE_SIZE;
+
+    descriptorWrites[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[4].dstSet = descriptorSet;
+    descriptorWrites[4].dstBinding = 4;
+    descriptorWrites[4].descriptorCount = 1;
+    descriptorWrites[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptorWrites[4].pBufferInfo = &lightCounterBufferInfo;
+
     vkUpdateDescriptorSets(device->getDevice(), static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
 
 }
@@ -578,6 +671,10 @@ void VolumeApp::cleanupSwapChain() {
     storageImage.reset();
 
     // Destroy pipelines and pipeline layouts
+    if (lightGenPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device->getDevice(), lightGenPipelineLayout, nullptr);
+        lightGenPipelineLayout = VK_NULL_HANDLE;
+    }
     if (graphicsPipelineLayout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(device->getDevice(), graphicsPipelineLayout, nullptr);
         graphicsPipelineLayout = VK_NULL_HANDLE;
@@ -586,6 +683,7 @@ void VolumeApp::cleanupSwapChain() {
         vkDestroyPipelineLayout(device->getDevice(), computePipelineLayout, nullptr);
         computePipelineLayout = VK_NULL_HANDLE;
     }
+    lightGenPipeline.reset();
     graphicsPipeline.reset();
     computePipeline.reset();
 
@@ -614,6 +712,10 @@ void VolumeApp::cleanup() {
     }
 
     // Destroy pipeline layouts
+    if (lightGenPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device->getDevice(), lightGenPipelineLayout, nullptr);
+        lightGenPipelineLayout = VK_NULL_HANDLE;
+    }
     if (graphicsPipelineLayout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(device->getDevice(), graphicsPipelineLayout, nullptr);
         graphicsPipelineLayout = VK_NULL_HANDLE;
@@ -626,8 +728,10 @@ void VolumeApp::cleanup() {
     // Destroy the storage image
     storageImage.reset();
 
-    // Destroy nanoVDB buffer
+    // Destroy buffers
     nanoVDBBuffer.reset();
+    pointLightsBuffer.reset();
+    lightCounterBuffer.reset();
 
     // Cleanup swap chain and other resources
     cleanupSwapChain();
