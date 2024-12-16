@@ -34,10 +34,16 @@ pnanovdb_uint32_t gridType;
 pnanovdb_readaccessor_t accessor;
 pnanovdb_grid_handle_t gridHandle;
 
-// Random number generator (simple hash-based)
+// Random number generator (simple hash-based PCG Family)
 uint hash(uvec3 v) {
-    v = (v*1664525u + 1013904223u) ^ (v.yzx*1664525u + 1013904223u);
-    return v.x ^ v.y ^ v.z;
+    uint x = v.x * 73856093u;
+    uint y = v.y * 19349663u;
+    uint z = v.z * 83492791u;
+    uint hash = x ^ y ^ z;
+    hash = (hash ^ (hash >> 16u)) * 0x45d9f3b;
+    hash = (hash ^ (hash >> 16u)) * 0x45d9f3b;
+    hash = hash ^ (hash >> 16u);
+    return hash;
 }
 float randf(uvec3 seed) {
     return float(hash(seed)) * (1.0/4294967295.0);
@@ -84,9 +90,8 @@ void main() {
 
     // Example: Start photons from a single directional "light" region or point.
     // Here we start photons from a single point:
-    vec3 photonOriginWorld = vec3(0.0, 30.0, 50.0);
-    lights[0].position = photonOriginWorld;
-
+    vec3 photonOriginWorld = vec3(0.0, 15.0, 10.0);
+    
     // Random direction in hemisphere:
     float r1 = randf(seed);
     float r2 = randf(seed + uvec3(1,1,1));
@@ -95,7 +100,7 @@ void main() {
     vec3 photonDirWorld = normalize(vec3(sin(theta)*cos(phi), sin(theta)*sin(phi), cos(theta)));
 
     float photonIntensity = 1000.0; // initial intensity
-    float scatteringProbability = 0.5; // probability of bouncing
+    float scatteringProbability = 0.01; // probability of bouncing
     float absorptionCoefficient = 1.0;
 
     // Convert to index space
@@ -114,28 +119,22 @@ void main() {
     vec3 boxMax = vec3(bboxMaxI.x + 1, bboxMaxI.y + 1, bboxMaxI.z + 1);
 
     float tmin = 0.0;
-    float tmax = 1200.0; // max distance
+    float tmax = 15000.0; // max distance
     bool hitVolume = intersectAABB(rayOriginLocal, rayDirLocal, boxMin, boxMax, tmin, tmax);
     
-    if(hitVolume)
-        lightCount = 50;    //TODO remove
-        /*
     float stepSize = 1.0;
     float T = 1.0; // transmittance
     float currentT = tmin;
     vec3 currentPosLocal = rayOriginLocal + rayDirLocal * tmin;
-
-    lights[1].position = currentPosLocal;
     
     while (hitVolume && currentT < tmax && T > 0.001 && photonIntensity > 0.1) {
         
         ivec3 ijk = ivec3(floor(currentPosLocal.x), floor(currentPosLocal.y), floor(currentPosLocal.z));
         if (ijk.x >= bboxMinI.x && ijk.y >= bboxMinI.y && ijk.z >= bboxMinI.z &&
             ijk.x <= bboxMaxI.x && ijk.y <= bboxMaxI.y && ijk.z <= bboxMaxI.z) {
+
             pnanovdb_address_t addr = pnanovdb_readaccessor_get_value_address(gridType, discarded, accessor, ijk);
             float val = pnanovdb_read_float(discarded, addr);
-
-            
 
             if (val > 0.0) {
                 // Attenuate photon
@@ -167,10 +166,12 @@ void main() {
                     // Update photon direction
                     rayDirLocal = newDirLocal;
                 }
+            }else{
+            //todo: check for ray volume intersection after empty space
             }
         }
 
         currentT += stepSize;
         currentPosLocal = rayOriginLocal + rayDirLocal * currentT;
-    }*/
+    }
 }
