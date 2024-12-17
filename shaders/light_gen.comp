@@ -166,8 +166,6 @@ void main() {
                     // Update photon direction
                     rayDirLocal = newDirLocal;
                 }
-            }else{
-            //todo: check for ray volume intersection after empty space
             }
         }
 
