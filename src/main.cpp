@@ -45,8 +45,14 @@ const std::string VERT_SHADER_PATH = "shaders/compiled_shaders/fullscreen.vert.s
 const std::string FRAG_SHADER_PATH = "shaders/compiled_shaders/sample_image.frag.spv";
 
 struct PointLight {
-	glm::vec3 position;
+    glm::vec3 position;
     float intensity;
+};
+
+struct LightCountBuffer
+{
+    uint32_t lightCounter;
+    uint32_t debug;
 };
 
 class VolumeApp {
@@ -135,7 +141,7 @@ private:
 
     // Callback for framebuffer resize
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
-	    const auto app = reinterpret_cast<VolumeApp*>(glfwGetWindowUserPointer(window));
+        const auto app = reinterpret_cast<VolumeApp*>(glfwGetWindowUserPointer(window));
         app->framebufferResized = true;
     }
 };
@@ -174,8 +180,8 @@ void VolumeApp::initVulkan() {
     createLightGenPipeline();
     createComputePipeline();
     createGraphicsPipeline();
-    swapChain->createFramebuffers(*renderPass);
     createCommandBuffers();
+    swapChain->createFramebuffers(*renderPass);
     createSyncObjects();
 }
 
@@ -201,7 +207,9 @@ void VolumeApp::createStorageImage() {
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = imageFormat;
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
     viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount = 1;
 
     if (vkCreateImageView(device->getDevice(), &viewInfo, nullptr, &storageImageView) != VK_SUCCESS) {
@@ -231,7 +239,7 @@ void VolumeApp::createLightBuffers()
     );
 
     // Buffer for the counter (uint)
-    VkDeviceSize counterBufferSize = sizeof(uint32_t);
+    VkDeviceSize counterBufferSize = sizeof(LightCountBuffer);
     lightCounterBuffer = std::make_unique<basalt::Buffer>(
         *device, counterBufferSize,
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -288,7 +296,6 @@ void VolumeApp::createDescriptorSetLayout() {
 
     descriptorSetLayout = std::make_unique<basalt::DescriptorSetLayout>(*device, bindings);
 }
-
 
 void VolumeApp::createDescriptorPoolAndSet() {
     std::vector<VkDescriptorPoolSize> poolSizes = {
@@ -351,6 +358,16 @@ void VolumeApp::createSampler() {
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.anisotropyEnable = VK_FALSE;
+    samplerInfo.maxAnisotropy = 1.0f;
+    samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    samplerInfo.unnormalizedCoordinates = VK_FALSE;
+    samplerInfo.compareEnable = VK_FALSE;
+    samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.mipLodBias = 0.0f;
+    samplerInfo.minLod = 0.0f;
+    samplerInfo.maxLod = 0.0f;
 
     if (vkCreateSampler(device->getDevice(), &samplerInfo, nullptr, &sampler) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create sampler!");
@@ -388,121 +405,11 @@ void VolumeApp::createGraphicsPipeline() {
 }
 
 void VolumeApp::createCommandBuffers() {
-    commandBuffers.resize(swapChain->getFramebuffers().size());
-
-    for (size_t i = 0; i < commandBuffers.size(); ++i) {
+    // Allocate one command buffer per frame in flight
+    commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         commandBuffers[i] = std::make_unique<basalt::CommandBuffer>(*device, *commandPool);
-
-        commandBuffers[i]->begin(VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT);
-
-        // Reset the light counter to zero before running light_gen.
-        vkCmdFillBuffer(
-            *commandBuffers[i]->get(),
-            lightCounterBuffer->getBuffer(),
-            0,
-            sizeof(uint32_t),
-            0 // fill with zero
-        );
-
-        // Run the light_gen pipeline
-        vkCmdBindPipeline(*commandBuffers[i]->get(), VK_PIPELINE_BIND_POINT_COMPUTE, lightGenPipeline->getPipeline());
-        vkCmdBindDescriptorSets(
-            *commandBuffers[i]->get(),
-            VK_PIPELINE_BIND_POINT_COMPUTE,
-            lightGenPipelineLayout,
-            0,
-            1,
-            &descriptorSet,
-            0,
-            nullptr
-        );
-
-        // Dispatch enough threads for the photon simulation
-        vkCmdDispatch(*commandBuffers[i]->get(), 16, 16, 1);
-
-        // Barrier to ensure that the light data is visible to the next compute pass
-        VkMemoryBarrier memoryBarrier{};
-        memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        memoryBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        memoryBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-
-        vkCmdPipelineBarrier(
-            *commandBuffers[i]->get(),
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            0,
-            1,
-            &memoryBarrier,
-            0, nullptr,
-            0, nullptr
-        );
-
-        // Bind compute pipeline and dispatch
-        vkCmdBindPipeline(*commandBuffers[i]->get(), VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline->getPipeline());
-        vkCmdBindDescriptorSets(
-            *commandBuffers[i]->get(),
-            VK_PIPELINE_BIND_POINT_COMPUTE,
-            computePipelineLayout,
-            0,
-            1,
-            &descriptorSet,
-            0,
-            nullptr);
-
-        // Dispatch compute shader with workgroup size (16x16)
-        const uint32_t groupCountX = (swapChain->getExtent().width + 15) / 16;
-        const uint32_t groupCountY = (swapChain->getExtent().height + 15) / 16;
-        vkCmdDispatch(*commandBuffers[i]->get(), groupCountX, groupCountY, 1);
-
-        // Memory barrier to ensure compute shader writes are visible to the fragment shader
-        VkImageMemoryBarrier barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = storageImage->getImage();
-        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        barrier.subresourceRange.levelCount = 1;
-        barrier.subresourceRange.layerCount = 1;
-
-        vkCmdPipelineBarrier(
-            *commandBuffers[i]->get(),
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            0,
-            0,
-            nullptr,
-            0,
-            nullptr,
-            1,
-            &barrier);
-
-        // Begin render pass
-        const VkClearValue clearColor = { {0.0f, 0.0f, 0.0f, 1.0f} };
-        commandBuffers[i]->beginRenderPass(renderPass->getRenderPass(), swapChain->getFramebuffers()[i], swapChain->getExtent(), clearColor);
-
-        // Bind graphics pipeline
-        commandBuffers[i]->bindPipeline(graphicsPipeline->getPipeline());
-
-        // Bind descriptor sets
-        vkCmdBindDescriptorSets(
-            *commandBuffers[i]->get(),
-            VK_PIPELINE_BIND_POINT_GRAPHICS,
-            graphicsPipelineLayout,
-            0,
-            1,
-            &descriptorSet,
-            0,
-            nullptr);
-
-        // Draw fullscreen triangle (no vertex buffer needed)
-        vkCmdDraw(*commandBuffers[i]->get(), 3, 1, 0, 0);
-
-        commandBuffers[i]->endRenderPass();
-        commandBuffers[i]->end();
+        // Do not pre-record commands here
     }
 }
 
@@ -520,6 +427,7 @@ void VolumeApp::mainLoop() {
 }
 
 void VolumeApp::drawFrame() {
+    // Wait for the fence to be signaled before starting the frame
     syncObjects->waitForInFlightFence(currentFrame);
 
     uint32_t imageIndex;
@@ -533,22 +441,181 @@ void VolumeApp::drawFrame() {
         throw std::runtime_error("Failed to acquire swap chain image!");
     }
 
+    // Reset the fence to the unsignaled state
     syncObjects->resetInFlightFence(currentFrame);
 
-    const VkSemaphore waitSemaphores[] = { syncObjects->getImageAvailableSemaphore(currentFrame) };
-    constexpr VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
-    const VkSemaphore signalSemaphores[] = { syncObjects->getRenderFinishedSemaphore(currentFrame) };
+    // Record command buffer for the current frame
+    basalt::CommandBuffer& cmdBuffer = *commandBuffers[currentFrame];
 
-    if (device->submitCommandBuffers(
-        commandBuffers[imageIndex]->get(), 1,
-        waitSemaphores, 1,
-        waitStages,
-        signalSemaphores, 1,
-        syncObjects->getInFlightFence(currentFrame)) != VK_SUCCESS) {
+    // Begin recording
+    cmdBuffer.begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+
+    // Reset the light counter to zero before running light_gen
+    vkCmdFillBuffer(
+        *cmdBuffer.get(),
+        lightCounterBuffer->getBuffer(),
+        0,
+        sizeof(LightCountBuffer),
+        0 // fill with zero
+    );
+
+    // ---- First Compute Shader: light_gen ----
+    vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, lightGenPipeline->getPipeline());
+    vkCmdBindDescriptorSets(
+        *cmdBuffer.get(),
+        VK_PIPELINE_BIND_POINT_COMPUTE,
+        lightGenPipelineLayout,
+        0,
+        1,
+        &descriptorSet,
+        0,
+        nullptr
+    );
+
+    // Dispatch compute shader
+    vkCmdDispatch(*cmdBuffer.get(), 1, 1, 1);   // just one block of local size 4x4
+
+    // Insert memory barrier to ensure light data is written before the next compute shader
+    VkMemoryBarrier memoryBarrier1{};
+    memoryBarrier1.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    memoryBarrier1.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    memoryBarrier1.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+
+    vkCmdPipelineBarrier(
+        *cmdBuffer.get(),
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        0,
+        1,
+        &memoryBarrier1,
+        0, nullptr,
+        0, nullptr
+    );
+
+    // ---- Second Compute Shader: compute_gradient ----
+    vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline->getPipeline());
+    vkCmdBindDescriptorSets(
+        *cmdBuffer.get(),
+        VK_PIPELINE_BIND_POINT_COMPUTE,
+        computePipelineLayout,
+        0,
+        1,
+        &descriptorSet,
+        0,
+        nullptr
+    );
+
+    // Dispatch compute shader with workgroup size (16x16)
+    const uint32_t groupCountX = (swapChain->getExtent().width + 15) / 16;
+    const uint32_t groupCountY = (swapChain->getExtent().height + 15) / 16;
+    vkCmdDispatch(*cmdBuffer.get(), groupCountX, groupCountY, 1);
+
+    // Insert memory barrier to ensure compute shader writes are visible to the fragment shader
+    VkImageMemoryBarrier imageBarrier{};
+    imageBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    imageBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    imageBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    imageBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    imageBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    imageBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    imageBarrier.image = storageImage->getImage();
+    imageBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    imageBarrier.subresourceRange.baseMipLevel = 0;
+    imageBarrier.subresourceRange.levelCount = 1;
+    imageBarrier.subresourceRange.baseArrayLayer = 0;
+    imageBarrier.subresourceRange.layerCount = 1;
+
+    vkCmdPipelineBarrier(
+        *cmdBuffer.get(),
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0,
+        0,
+        nullptr,
+        0,
+        nullptr,
+        1,
+        &imageBarrier
+    );
+
+    // ---- Graphics Pipeline: Render Pass ----
+    VkClearValue clearColor = { {0.0f, 0.0f, 0.0f, 1.0f} };
+    VkRenderPassBeginInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    renderPassInfo.renderPass = renderPass->getRenderPass();
+    renderPassInfo.framebuffer = swapChain->getFramebuffers()[imageIndex];
+    renderPassInfo.renderArea.offset = { 0, 0 };
+    renderPassInfo.renderArea.extent = swapChain->getExtent();
+    renderPassInfo.clearValueCount = 1;
+    renderPassInfo.pClearValues = &clearColor;
+
+    vkCmdBeginRenderPass(*cmdBuffer.get(), &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    // Bind graphics pipeline
+    vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline->getPipeline());
+
+    // Bind descriptor sets
+    vkCmdBindDescriptorSets(
+        *cmdBuffer.get(),
+        VK_PIPELINE_BIND_POINT_GRAPHICS,
+        graphicsPipelineLayout,
+        0,
+        1,
+        &descriptorSet,
+        0,
+        nullptr
+    );
+
+    // Draw fullscreen triangle (no vertex buffer needed)
+    vkCmdDraw(*cmdBuffer.get(), 3, 1, 0, 0);
+
+    // End render pass
+    vkCmdEndRenderPass(*cmdBuffer.get());
+
+    // End recording
+    cmdBuffer.end();
+
+    // ---- Submit Command Buffer ----
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+    // Wait on the imageAvailableSemaphore
+    VkSemaphore waitSemaphores[] = { syncObjects->getImageAvailableSemaphore(currentFrame) };
+    VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT };
+    submitInfo.waitSemaphoreCount = 1;
+    submitInfo.pWaitSemaphores = waitSemaphores;
+    submitInfo.pWaitDstStageMask = waitStages;
+
+    // Specify the command buffer to submit
+    VkCommandBuffer submitCmdBuffer = *cmdBuffer.get();
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &submitCmdBuffer;
+
+    // Signal the renderFinishedSemaphore when the command buffer finishes
+    VkSemaphore signalSemaphores[] = { syncObjects->getRenderFinishedSemaphore(currentFrame) };
+    submitInfo.signalSemaphoreCount = 1;
+    submitInfo.pSignalSemaphores = signalSemaphores;
+
+    if (vkQueueSubmit(device->getGraphicsQueue(), 1, &submitInfo, syncObjects->getInFlightFence(currentFrame)) != VK_SUCCESS) {
         throw std::runtime_error("Failed to submit draw command buffer!");
     }
 
-    result = swapChain->presentImage(*syncObjects, currentFrame, imageIndex);
+    // ---- Present the Image ----
+    VkPresentInfoKHR presentInfo{};
+    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+
+    // Wait on the renderFinishedSemaphore
+    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.pWaitSemaphores = signalSemaphores;
+
+    // Specify the swapchain and image to present
+    VkSwapchainKHR swapChains[] = { swapChain->getSwapChain() };
+    presentInfo.swapchainCount = 1;
+    presentInfo.pSwapchains = swapChains;
+    presentInfo.pImageIndices = &imageIndex;
+
+    result = vkQueuePresentKHR(device->getPresentQueue(), &presentInfo);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
         framebufferResized = false;
@@ -558,6 +625,7 @@ void VolumeApp::drawFrame() {
         throw std::runtime_error("Failed to present swap chain image!");
     }
 
+    // Advance to the next frame
     currentFrame = (currentFrame + 1) % syncObjects->getMaxFramesInFlight();
 }
 
@@ -570,7 +638,6 @@ void VolumeApp::recreateSwapChain() {
     }
 
     vkDeviceWaitIdle(device->getDevice());
-
     cleanupSwapChain();
 
     swapChain = std::make_unique<basalt::SwapChain>(*device, *surface, window);
@@ -653,9 +720,7 @@ void VolumeApp::updateDescriptorSet() const
     descriptorWrites[4].pBufferInfo = &lightCounterBufferInfo;
 
     vkUpdateDescriptorSets(device->getDevice(), static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
-
 }
-
 
 void VolumeApp::cleanupSwapChain() {
     vkDeviceWaitIdle(device->getDevice());
@@ -670,7 +735,12 @@ void VolumeApp::cleanupSwapChain() {
     }
     storageImage.reset();
 
-    // Destroy pipelines and pipeline layouts
+    // Destroy pipelines first
+    lightGenPipeline.reset();
+    graphicsPipeline.reset();
+    computePipeline.reset();
+
+    // Then destroy pipeline layouts
     if (lightGenPipelineLayout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(device->getDevice(), lightGenPipelineLayout, nullptr);
         lightGenPipelineLayout = VK_NULL_HANDLE;
@@ -683,9 +753,6 @@ void VolumeApp::cleanupSwapChain() {
         vkDestroyPipelineLayout(device->getDevice(), computePipelineLayout, nullptr);
         computePipelineLayout = VK_NULL_HANDLE;
     }
-    lightGenPipeline.reset();
-    graphicsPipeline.reset();
-    computePipeline.reset();
 
     // Destroy framebuffers and render pass
     swapChain->cleanup();
@@ -694,7 +761,6 @@ void VolumeApp::cleanupSwapChain() {
     // Destroy swap chain
     swapChain.reset();
 }
-
 
 void VolumeApp::cleanup() {
     vkDeviceWaitIdle(device->getDevice());
@@ -711,19 +777,8 @@ void VolumeApp::cleanup() {
         sampler = VK_NULL_HANDLE;
     }
 
-    // Destroy pipeline layouts
-    if (lightGenPipelineLayout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(device->getDevice(), lightGenPipelineLayout, nullptr);
-        lightGenPipelineLayout = VK_NULL_HANDLE;
-    }
-    if (graphicsPipelineLayout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(device->getDevice(), graphicsPipelineLayout, nullptr);
-        graphicsPipelineLayout = VK_NULL_HANDLE;
-    }
-    if (computePipelineLayout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(device->getDevice(), computePipelineLayout, nullptr);
-        computePipelineLayout = VK_NULL_HANDLE;
-    }
+    // Destroy pipelines and pipeline layouts
+    // (Already handled in cleanupSwapChain())
 
     // Destroy the storage image
     storageImage.reset();
@@ -814,7 +869,7 @@ void VolumeApp::createNanoVDBBuffer() {
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
     // Create a staging buffer to transfer data to device local memory
-    const basalt::Buffer stagingBuffer(
+    basalt::Buffer stagingBuffer(
         *device,
         bufferSize,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -830,7 +885,6 @@ void VolumeApp::createNanoVDBBuffer() {
     // Clean up OpenVDB
     openvdb::uninitialize();
 }
-
 
 int main() {
     try {
