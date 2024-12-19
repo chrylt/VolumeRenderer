@@ -91,7 +91,7 @@ void main() {
 
     // Example: Start photons from a single directional "light" region or point.
     // Here we start photons from a single point:
-    vec3 photonOriginWorld = vec3(0.0, 15.0, 10.0);
+    vec3 photonOriginWorld = vec3(-20.0, 15.0, 5.0);
     
     // Random direction in hemisphere:
     float r1 = randf(seed);
@@ -99,6 +99,15 @@ void main() {
     float theta = acos(1.0 - 2.0 * r1);
     float phi = 2.0 * M_PI * r2;
     vec3 photonDirWorld = normalize(vec3(sin(theta)*cos(phi), sin(theta)*sin(phi), cos(theta)));
+
+    /*uint index = atomicAdd(lightCount, 1);
+    if (index < MAX_LIGHTS) {
+        lights[index].position = photonOriginWorld + photonDirWorld * 5;
+        lights[index].intensity = 100;
+    }else{
+        lightCount = MAX_LIGHTS;
+    }
+    return;*/
 
     float photonIntensity = 1000.0; // initial intensity
     float scatteringProbability = 0.1; // probability of bouncing
@@ -120,7 +129,7 @@ void main() {
     vec3 boxMax = vec3(bboxMaxI.x + 1, bboxMaxI.y + 1, bboxMaxI.z + 1);
 
     float tmin = 0.0;
-    float tmax = 120000.0; // max distance
+    float tmax = 12000.0; // max distance
     bool hitVolume = intersectAABB(rayOriginLocal, rayDirLocal, boxMin, boxMax, tmin, tmax);
 
     float stepSize = 1.0;

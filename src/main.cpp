@@ -32,8 +32,8 @@
 #include "utils.h"
 
 // Constants for window dimensions
-constexpr uint32_t WIDTH = 256;
-constexpr uint32_t HEIGHT = 256;
+constexpr uint32_t WIDTH = 1024;
+constexpr uint32_t HEIGHT = 1024;
 
 // Maximum number of frames that can be processed concurrently
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
@@ -893,6 +893,7 @@ int main() {
     }
     catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
+        std::cin.get(); // wait before closing for debugging purposes
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;
