@@ -6,7 +6,7 @@
 #define LIGHT_SOURCE vec3(0.0, 15.0, 10.0)
 
 layout(local_size_x = 16, local_size_y = 16) in;
-layout(binding = 0, rgba8) uniform writeonly image2D img;
+layout(binding = 0, rgba8) uniform image2D img;
 
 struct PointLight {
     vec3 position;
@@ -155,7 +155,7 @@ bool intersectPointLights(in Ray ray){  // Visualize positions of point lights
         PointLight light = lights[i];
 
         float t_discard;
-        if(intersectSphere(ray, light.position, 0.5, t_discard))
+        if(intersectSphere(ray, light.position, 0.2, t_discard))
             return true;
     }
     return false;
@@ -280,5 +280,8 @@ void main() {
 
 
     vec4 color = vec4(displayedColor, 1.0);
-    imageStore(img, pixelCoords, color);
+    //imageStore(img, pixelCoords, color);
+
+    vec4 currColor = imageLoad(pixelCoords);
+    imageAtomicStore(img, pixelCoords, currColor + color);
 }
