@@ -238,7 +238,7 @@ void main() {
         float t = tmin;
         
         float T = 1.0; // transmittance
-        float absorptionCoefficient = 1.0;
+        float absorptionCoefficient = 0.1;
 
         while (t < tmax && T > 0.001) {
             vec3 pLocal = rayOriginLocal + rayDirLocal * t;
@@ -280,8 +280,5 @@ void main() {
 
 
     vec4 color = vec4(displayedColor, 1.0);
-    //imageStore(img, pixelCoords, color);
-
-    vec4 currColor = imageLoad(pixelCoords);
-    imageAtomicStore(img, pixelCoords, currColor + color);
+    imageStore(img, pixelCoords, color);
 }

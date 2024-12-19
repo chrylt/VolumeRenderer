@@ -144,7 +144,7 @@ void main() {
     float currentT = tmin;
     vec3 currentPosLocal = rayOriginLocal + rayDirLocal * tmin;
     
-    while (hitVolume && currentT < tmax && T > 0.0001 && photonIntensity > 0.001) {
+    while (hitVolume && currentT < tmax && T > 0.001 && photonIntensity > 0.01) {
         
         ivec3 ijk = ivec3(floor(currentPosLocal.x), floor(currentPosLocal.y), floor(currentPosLocal.z));
         if (ijk.x >= bboxMinI.x && ijk.y >= bboxMinI.y && ijk.z >= bboxMinI.z &&
