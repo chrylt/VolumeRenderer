@@ -12,9 +12,6 @@ struct PointLight {
     float intensity;
 };
 
-// Max lights that can be stored
-const uint MAX_LIGHTS = 1000;
-
 layout(std430, binding = 3) buffer PointLightBuffer {
     PointLight lights[];
 };
@@ -22,6 +19,20 @@ layout(std430, binding = 3) buffer PointLightBuffer {
 layout(std430, binding = 4) buffer LightCounterBuffer {
     uint lightCount;
     uint debug;
+};
+
+layout(std140, binding = 5) uniform UBO {
+    uint frameCount;
+    uvec2 framebufferDim;
+    vec3 cameraPos;
+    float fov;
+    float photonInitialIntensity;
+    float scatteringProbability;
+    float absorptionCoefficient;
+    uint maxLights;
+    float rayMaxDistance;
+    float rayMarchingStepSize;
+    vec3 lightSourceWorldPos;
 };
 
 // NanoVDB buffer & code
@@ -102,23 +113,10 @@ void main() {
 
     // Example: Start photons from a single directional "light" region or point.
     // Here we start photons from a single point:
-    vec3 photonOriginWorld = vec3(-20.0, 15.0, -15.0);
+    vec3 photonOriginWorld = lightSourceWorldPos;
     
     // Random direction in hemisphere:
     vec3 photonDirWorld = randomDir(randf_inc(seed), randf_inc(seed));
-
-    /*uint index = atomicAdd(lightCount, 1);
-    if (index < MAX_LIGHTS) {
-        lights[index].position = photonOriginWorld + photonDirWorld * 5;
-        lights[index].intensity = 100;
-    }else{
-        lightCount = MAX_LIGHTS;
-    }
-    return;*/
-
-    float photonIntensity = 10.0; // initial intensity
-    float scatteringProbability = 0.5; // probability of bouncing
-    float absorptionCoefficient = 0.1;
 
     // Convert to index space
     pnanovdb_vec3_t oIndex = pnanovdb_grid_world_to_indexf(discarded, gridHandle, pnanovdb_vec3_t(photonOriginWorld.x, photonOriginWorld.y, photonOriginWorld.z));
@@ -136,13 +134,14 @@ void main() {
     vec3 boxMax = vec3(bboxMaxI.x + 1, bboxMaxI.y + 1, bboxMaxI.z + 1);
 
     float tmin = 0.0;
-    float tmax = 12000.0; // max distance
+    float tmax = rayMaxDistance; // max distance
     bool hitVolume = intersectAABB(rayOriginLocal, rayDirLocal, boxMin, boxMax, tmin, tmax);
 
-    float stepSize = 1.0;
+    float stepSize = rayMarchingStepSize;
     float T = 1.0; // transmittance starts at 100%
     float currentT = tmin;
     vec3 currentPosLocal = rayOriginLocal + rayDirLocal * tmin;
+    float photonIntensity = photonInitialIntensity;
     
     while (hitVolume && currentT < tmax && T > 0.001 && photonIntensity > 0.01) {
         
@@ -173,11 +172,11 @@ void main() {
 
                     // Append a new point light to the buffer
                     uint index = atomicAdd(lightCount, 1);
-                    if (index < MAX_LIGHTS) {
+                    if (index < maxLights) {
                         lights[index].position = newLightPosWorld;
                         lights[index].intensity = photonIntensity;
                     }else{
-                        lightCount = MAX_LIGHTS;
+                        lightCount = maxLights;
                     }
 
                     // Update photon direction

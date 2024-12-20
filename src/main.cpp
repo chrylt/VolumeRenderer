@@ -8,6 +8,7 @@
 #include <vulkan/vulkan_core.h>
 #include <GLFW/glfw3.h>
 
+#include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 
 #include <openvdb/openvdb.h>
@@ -55,6 +56,21 @@ struct LightCountBuffer
     uint32_t debug;
 };
 
+struct UBO {
+    alignas(4) uint32_t frameCount;
+    alignas(8) glm::uvec2 framebufferDim;
+    alignas(16) glm::vec3 cameraPos;
+    alignas(4) float fov;
+    alignas(4) float photonInitialIntensity;
+    alignas(4) float scatteringProbability;
+    alignas(4) float absorptionCoefficient;
+    alignas(4) uint32_t maxLights;
+    alignas(4) float rayMaxDistance;
+    alignas(4) float rayMarchingStepSize;
+    alignas(16) glm::vec3 lightSourceWorldPos;
+};
+
+
 class VolumeApp {
 public:
     VolumeApp() {
@@ -93,10 +109,12 @@ private:
     VkImageView storageImageView;
     VkSampler sampler;
 
-    // NanoVDB
+    // Buffers
     std::unique_ptr<basalt::Buffer> nanoVDBBuffer;
     std::unique_ptr<basalt::Buffer> pointLightsBuffer;
     std::unique_ptr<basalt::Buffer> lightCounterBuffer;
+    std::unique_ptr<basalt::Buffer> uniformBuffer;
+    UBO uboData;
 
     // Pipelines
     VkPipelineLayout graphicsPipelineLayout;
@@ -124,6 +142,7 @@ private:
     void createSyncObjects();
     void createSampler();
     void createNanoVDBBuffer();
+    void createUniformBuffer();
 
     // Rendering loop
     void mainLoop();
@@ -175,6 +194,7 @@ void VolumeApp::initVulkan() {
     createLightBuffers();
     createStorageImage();
     createSampler();
+    createUniformBuffer();
     createDescriptorSetLayout();
     createDescriptorPoolAndSet();
     createLightGenPipeline();
@@ -286,12 +306,21 @@ void VolumeApp::createDescriptorSetLayout() {
     lightCounterBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     lightCounterBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
+    // Binding 5: Uniform buffer
+    VkDescriptorSetLayoutBinding uniformBufferLayoutBinding{};
+    uniformBufferLayoutBinding.binding = 5;
+    uniformBufferLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uniformBufferLayoutBinding.descriptorCount = 1;
+    uniformBufferLayoutBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    uniformBufferLayoutBinding.pImmutableSamplers = nullptr;
+
     std::vector<VkDescriptorSetLayoutBinding> bindings = {
         storageImageLayoutBinding,
         samplerLayoutBinding,
         storageBufferLayoutBinding,
         pointLightsBinding,
-        lightCounterBinding
+        lightCounterBinding,
+        uniformBufferLayoutBinding
     };
 
     descriptorSetLayout = std::make_unique<basalt::DescriptorSetLayout>(*device, bindings);
@@ -301,7 +330,8 @@ void VolumeApp::createDescriptorPoolAndSet() {
     std::vector<VkDescriptorPoolSize> poolSizes = {
         { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 },
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 },
-        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 }
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 },
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}
     };
 
     descriptorPool = std::make_unique<basalt::DescriptorPool>(*device, 1, poolSizes);
@@ -373,6 +403,28 @@ void VolumeApp::createSampler() {
         throw std::runtime_error("Failed to create sampler!");
     }
 }
+
+void VolumeApp::createUniformBuffer()
+{
+    VkDeviceSize bufferSize = sizeof(UBO);
+    uniformBuffer = std::make_unique<basalt::Buffer>(*device, bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    // Set UBO values
+    uboData.frameCount = 0;
+    uboData.framebufferDim = glm::uvec2(swapChain->getExtent().width, swapChain->getExtent().height);
+    uboData.cameraPos = glm::vec3(0.0, 20.0, -75.0);
+    uboData.fov = 45.0f;
+    uboData.photonInitialIntensity = 10.0f;
+    uboData.scatteringProbability = 0.5f;
+    uboData.absorptionCoefficient = 0.1f;
+    uboData.maxLights = 1000;
+    uboData.rayMaxDistance = 12000.0f;
+    uboData.rayMarchingStepSize = 1.0f;
+    uboData.lightSourceWorldPos = glm::vec3(-20.0, 15.0, -15.0);
+
+    uniformBuffer->updateBuffer(*commandPool, &uboData, sizeof(UBO));
+}
+
 
 void VolumeApp::createGraphicsPipeline() {
     // Empty vertex input state
@@ -446,6 +498,11 @@ void VolumeApp::drawFrame() {
 
     // Record command buffer for the current frame
     basalt::CommandBuffer& cmdBuffer = *commandBuffers[currentFrame];
+
+    // Update UBO:
+    uboData.frameCount++;
+
+    uniformBuffer->updateBuffer(*commandPool, &uboData, sizeof(UBO));
 
     // Begin recording
     cmdBuffer.begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
@@ -653,7 +710,7 @@ void VolumeApp::recreateSwapChain() {
 void VolumeApp::updateDescriptorSet() const
 {
     // Update descriptor set
-    std::array<VkWriteDescriptorSet, 5> descriptorWrites{};
+    std::array<VkWriteDescriptorSet, 6> descriptorWrites{};
 
     // Binding 0: Storage image
     VkDescriptorImageInfo storageImageInfo{};
@@ -718,6 +775,19 @@ void VolumeApp::updateDescriptorSet() const
     descriptorWrites[4].descriptorCount = 1;
     descriptorWrites[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     descriptorWrites[4].pBufferInfo = &lightCounterBufferInfo;
+
+    // Binding 5: Uniform buffer
+    VkDescriptorBufferInfo uniformBufferInfo{};
+    uniformBufferInfo.buffer = uniformBuffer->getBuffer();
+    uniformBufferInfo.offset = 0;
+    uniformBufferInfo.range = sizeof(UBO);
+
+    descriptorWrites[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[5].dstSet = descriptorSet;
+    descriptorWrites[5].dstBinding = 5;
+    descriptorWrites[5].descriptorCount = 1;
+    descriptorWrites[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    descriptorWrites[5].pBufferInfo = &uniformBufferInfo;
 
     vkUpdateDescriptorSets(device->getDevice(), static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
 }
@@ -787,6 +857,7 @@ void VolumeApp::cleanup() {
     nanoVDBBuffer.reset();
     pointLightsBuffer.reset();
     lightCounterBuffer.reset();
+    uniformBuffer.reset();
 
     // Cleanup swap chain and other resources
     cleanupSwapChain();

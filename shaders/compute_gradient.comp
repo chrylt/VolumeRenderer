@@ -29,6 +29,20 @@ layout(std430, binding = 4) buffer LightCounterBuffer {
     uint debug;
 };
 
+layout(std140, binding = 5) uniform UBO {
+    uint frameCount;
+    uvec2 framebufferDim;
+    vec3 cameraPos;
+    float fov;
+    float photonInitialIntensity;
+    float scatteringProbability;
+    float absorptionCoefficient;
+    uint maxLights;
+    float rayMaxDistance;
+    float rayMarchingStepSize;
+    vec3 lightSourceWorldPos;
+};
+
 // NanoVDB buffer & code
 layout(binding = 2) readonly buffer NanoVDBBuffer {
     uint pnanovdb_buf_data[];
@@ -195,10 +209,8 @@ void main() {
     float u = float(pixelCoords.x) / float(imageSize.x);
     float v = float(pixelCoords.y) / float(imageSize.y);
 
-    int width = 1024;
-    int height = 1024;
-    vec3 cameraPos = vec3(0.0, 20.0, -75.0);
-    float fov = 45.0;
+    uint width = framebufferDim.x;
+    uint height = framebufferDim.y;
     float aspectRatio = float(width) / float(height);
     float scale = tan(fov * 0.5 * M_PI / 180.0);
 
@@ -209,7 +221,7 @@ void main() {
     ray.origin = cameraPos;
     ray.direction = normalize(vec3(x, y, 1.0));
     ray.minDistance = 0.0;
-    ray.maxDistance = 15000.0;
+    ray.maxDistance = rayMaxDistance;
 
     // Transform ray into local index space
     pnanovdb_vec3_t oIndex = pnanovdb_grid_world_to_indexf(discarded, gridHandle, pnanovdb_vec3_t(ray.origin.x, ray.origin.y, ray.origin.z));
@@ -234,11 +246,10 @@ void main() {
     vec3 finalColor = vec3(0.0);
     if (hitVolume && tmax > 0.0) {
         tmin = max(tmin, 0.0);
-        float stepSize = 1.0;
+        float stepSize = rayMarchingStepSize;
         float t = tmin;
         
         float T = 1.0; // transmittance
-        float absorptionCoefficient = 0.1;
 
         while (t < tmax && T > 0.001) {
             vec3 pLocal = rayOriginLocal + rayDirLocal * t;
@@ -273,10 +284,10 @@ void main() {
 
 
     // point light debug
-    bool hit = intersectPointLights(ray);
+    /*bool hit = intersectPointLights(ray);
     if(hit){
         displayedColor = vec3(0,1,1);
-    }
+    }*/
 
 
     vec4 color = vec4(displayedColor, 1.0);
