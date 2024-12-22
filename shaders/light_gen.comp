@@ -109,7 +109,7 @@ void main() {
     // Each thread can emit one photon or multiple photons.
     // For simplicity, one photon per thread.
     uvec3 gid = gl_GlobalInvocationID;
-    uvec3 seed = uvec3(gid.x, gid.y, gid.z);
+    uvec3 seed = uvec3(gid.x, gid.y, gid.z) * frameCount;
 
     // Example: Start photons from a single directional "light" region or point.
     // Here we start photons from a single point:

@@ -280,16 +280,16 @@ void main() {
         }
     }
 
-    vec3 displayedColor = clamp(finalColor / float(lightCount), 0.0, 1.0);
+    vec3 frameColor = clamp(finalColor / float(lightCount), 0.0, 1.0);
 
+    vec3 previousColor = imageLoad(img, pixelCoords).rgb;
 
-    // point light debug
-    /*bool hit = intersectPointLights(ray);
-    if(hit){
-        displayedColor = vec3(0,1,1);
-    }*/
+    vec4 newColor = vec4((previousColor * (frameCount - 1) + frameColor) / frameCount, 1);
 
+    imageStore(img, pixelCoords, newColor);
+
+    /*vec3 displayedColor = clamp(finalColor / float(lightCount), 0.0, 1.0);
 
     vec4 color = vec4(displayedColor, 1.0);
-    imageStore(img, pixelCoords, color);
+    imageStore(img, pixelCoords, color);*/
 }
