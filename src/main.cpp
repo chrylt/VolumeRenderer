@@ -41,7 +41,7 @@ constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 // Paths to compiled shader modules
 const std::string LIGHT_GEN_PATH = "shaders/compiled_shaders/light_gen.comp.spv";
-const std::string COMPUTE_SHADER_PATH = "shaders/compiled_shaders/compute_gradient.comp.spv";
+const std::string COMPUTE_SHADER_PATH = "shaders/compiled_shaders/compute_color.comp.spv";
 const std::string VERT_SHADER_PATH = "shaders/compiled_shaders/fullscreen.vert.spv";
 const std::string FRAG_SHADER_PATH = "shaders/compiled_shaders/sample_image.frag.spv";
 
