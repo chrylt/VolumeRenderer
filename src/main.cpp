@@ -45,8 +45,9 @@ const std::string COMPUTE_SHADER_PATH = "shaders/compiled_shaders/compute_color.
 const std::string VERT_SHADER_PATH = "shaders/compiled_shaders/fullscreen.vert.spv";
 const std::string FRAG_SHADER_PATH = "shaders/compiled_shaders/sample_image.frag.spv";
 
-struct PointLight {
-    glm::vec3 position;
+struct RayLight {
+    glm::vec3 positionFrom;
+    glm::vec3 positionTo;
     float intensity;
 };
 
@@ -111,7 +112,7 @@ private:
 
     // Buffers
     std::unique_ptr<basalt::Buffer> nanoVDBBuffer;
-    std::unique_ptr<basalt::Buffer> pointLightsBuffer;
+    std::unique_ptr<basalt::Buffer> rayLightsBuffer;
     std::unique_ptr<basalt::Buffer> lightCounterBuffer;
     std::unique_ptr<basalt::Buffer> uniformBuffer;
     UBO uboData;
@@ -251,8 +252,8 @@ void VolumeApp::createLightBuffers()
 {
     // Create a buffer for point lights
     VkDeviceSize maxLights = 100000;
-    VkDeviceSize pointLightsBufferSize = sizeof(PointLight) * maxLights;
-    pointLightsBuffer = std::make_unique<basalt::Buffer>(
+    VkDeviceSize pointLightsBufferSize = sizeof(RayLight) * maxLights;
+    rayLightsBuffer = std::make_unique<basalt::Buffer>(
         *device, pointLightsBufferSize,
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
@@ -750,18 +751,18 @@ void VolumeApp::updateDescriptorSet() const
     descriptorWrites[2].descriptorCount = 1;
     descriptorWrites[2].pBufferInfo = &bufferInfo;
 
-    // Binding 3: Point light buffer
-    VkDescriptorBufferInfo pointLightsBufferInfo{};
-    pointLightsBufferInfo.buffer = pointLightsBuffer->getBuffer();
-    pointLightsBufferInfo.offset = 0;
-    pointLightsBufferInfo.range = VK_WHOLE_SIZE;
+    // Binding 3: Light buffer
+    VkDescriptorBufferInfo rayLightsBufferInfo{};
+    rayLightsBufferInfo.buffer = rayLightsBuffer->getBuffer();
+    rayLightsBufferInfo.offset = 0;
+    rayLightsBufferInfo.range = VK_WHOLE_SIZE;
 
     descriptorWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     descriptorWrites[3].dstSet = descriptorSet;
     descriptorWrites[3].dstBinding = 3;
     descriptorWrites[3].descriptorCount = 1;
     descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    descriptorWrites[3].pBufferInfo = &pointLightsBufferInfo;
+    descriptorWrites[3].pBufferInfo = &rayLightsBufferInfo;
 
     // Binding 4: Light count buffer
     VkDescriptorBufferInfo lightCounterBufferInfo{};
@@ -855,7 +856,7 @@ void VolumeApp::cleanup() {
 
     // Destroy buffers
     nanoVDBBuffer.reset();
-    pointLightsBuffer.reset();
+    rayLightsBuffer.reset();
     lightCounterBuffer.reset();
     uniformBuffer.reset();
 

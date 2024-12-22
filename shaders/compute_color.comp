@@ -8,8 +8,9 @@
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(binding = 0, rgba8) uniform image2D img;
 
-struct PointLight {
-    vec3 position;
+struct RayLight {
+    vec3 positionFrom;
+    vec3 positionTo;
     float intensity;
 };
 
@@ -21,7 +22,7 @@ struct Ray {
 };
 
 layout(std430, binding = 3) buffer PointLightBuffer {
-    PointLight lights[];
+    RayLight lights[];
 };
 
 layout(std430, binding = 4) buffer LightCounterBuffer {
@@ -166,10 +167,10 @@ bool intersectThickRay(
 
 bool intersectPointLights(in Ray ray){  // Visualize positions of point lights
     for(uint i = 0; i < lightCount; ++i){
-        PointLight light = lights[i];
+        RayLight light = lights[i];
 
         float t_discard;
-        if(intersectSphere(ray, light.position, 0.2, t_discard))
+        if(intersectSphere(ray, light.positionTo, 0.2, t_discard))
             return true;
     }
     return false;
@@ -177,10 +178,10 @@ bool intersectPointLights(in Ray ray){  // Visualize positions of point lights
 
 bool intersectRayLights(in Ray ray){  // Visualize positions of point lights
     for(uint i = 0; i < lightCount; ++i){
-        PointLight light = lights[i];
+        RayLight light = lights[i];
 
-        float t_discard;
-        if(intersectThickRay(ray.origin, ray.direction, LIGHT_SOURCE, lights[i].position, 0.1, t_discard)){
+        float t_discard;    // TODO, direction vs end point not functional yet
+        if(intersectThickRay(ray.origin, ray.direction, lights[i].positionFrom, lights[i].positionTo, 0.1, t_discard)){
             return true;
         }
     }
@@ -190,7 +191,7 @@ bool intersectRayLights(in Ray ray){  // Visualize positions of point lights
 vec3 computeLightContribution(vec3 sampleWorldPos) {
     vec3 totalLight = vec3(0.0);
     for (int i = 0; i < lightCount; i++) {
-        vec3 L = lights[i].position - sampleWorldPos;
+        vec3 L = lights[i].positionTo - sampleWorldPos;
         float dist2 = dot(L, L);
         if (dist2 < 0.0001) continue; // guard against division by zero
         float dist = sqrt(dist2);
@@ -287,9 +288,4 @@ void main() {
     vec4 newColor = vec4((previousColor * (frameCount - 1) + frameColor) / frameCount, 1);
 
     imageStore(img, pixelCoords, newColor);
-
-    /*vec3 displayedColor = clamp(finalColor / float(lightCount), 0.0, 1.0);
-
-    vec4 color = vec4(displayedColor, 1.0);
-    imageStore(img, pixelCoords, color);*/
 }
