@@ -701,6 +701,7 @@ void VolumeApp::drawFrame() {
 }
 
 void VolumeApp::recreateSwapChain() {
+    uboData.frameCount = 0;
     int width = 0, height = 0;
     glfwGetFramebufferSize(window, &width, &height);
     while (width == 0 || height == 0) {
@@ -715,6 +716,7 @@ void VolumeApp::recreateSwapChain() {
     renderPass = std::make_unique<basalt::RenderPass>(*device, swapChain->getImageFormat());
     createStorageImage();
     updateDescriptorSet();
+    createLightGenPipeline();
     createComputePipeline();
     createGraphicsPipeline();
     swapChain->createFramebuffers(*renderPass);
