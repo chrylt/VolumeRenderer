@@ -16,6 +16,7 @@ project(VolumeRenderer LANGUAGES CXX CUDA)
 # Add submodules
 add_subdirectory(external/Basalt)
 add_subdirectory(external/openvdb)
+add_subdirectory(external/imgui)
 
 # Find other packages (excluding GLM)
 find_package(glfw3 REQUIRED)
@@ -55,7 +56,7 @@ add_library(glm INTERFACE)
 target_include_directories(glm INTERFACE ${VCPKG_ROOT}/installed/x64-windows/include)
 
 # Link Basalt library, GLM interface, OpenVDB, and Vulkan
-target_link_libraries(VolumeRenderer PRIVATE Basalt glm openvdb Vulkan::Vulkan)
+target_link_libraries(VolumeRenderer PRIVATE Basalt glm openvdb Vulkan::Vulkan imgui)
 
 # Set C++ standard
 set_target_properties(VolumeRenderer PROPERTIES

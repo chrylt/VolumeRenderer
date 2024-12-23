@@ -16,6 +16,10 @@
 #include <nanovdb/io/IO.h>
 #include <nanovdb/tools/CreatePrimitives.h>
 
+#include "imgui.h"
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_vulkan.h"
+
 #include "buffer.h"
 #include "command_buffer.h"
 #include "command_pool.h"
@@ -79,6 +83,7 @@ public:
     VolumeApp() {
         initWindow();
         initVulkan();
+        initImGui();
     }
 
     void run() {
@@ -109,8 +114,8 @@ private:
 
     // Storage image
     std::unique_ptr<basalt::Image> storageImage;
-    VkImageView storageImageView;
-    VkSampler sampler;
+    VkImageView storageImageView = VK_NULL_HANDLE;
+    VkSampler sampler = VK_NULL_HANDLE;
 
     // Buffers
     std::unique_ptr<basalt::Buffer> nanoVDBBuffer;
@@ -120,9 +125,9 @@ private:
     UBO uboData;
 
     // Pipelines
-    VkPipelineLayout graphicsPipelineLayout;
-    VkPipelineLayout computePipelineLayout;
-    VkPipelineLayout lightGenPipelineLayout;
+    VkPipelineLayout graphicsPipelineLayout = VK_NULL_HANDLE;
+    VkPipelineLayout computePipelineLayout = VK_NULL_HANDLE;
+    VkPipelineLayout lightGenPipelineLayout = VK_NULL_HANDLE;
 
     // Command buffers
     std::vector<std::unique_ptr<basalt::CommandBuffer>> commandBuffers;
@@ -131,9 +136,13 @@ private:
     size_t currentFrame = 0;
     bool framebufferResized = false;
 
+    // A separate descriptor pool for ImGui (you could also reuse your basalt one, but it's simpler to keep them separate).
+    VkDescriptorPool imguiDescriptorPool = VK_NULL_HANDLE;
+
     // Initialization methods
     void initWindow();
     void initVulkan();
+    void initImGui();
     void createStorageImage();
     void createLightBuffers();
     void createDescriptorSetLayout();
@@ -208,9 +217,60 @@ void VolumeApp::initVulkan() {
     createSyncObjects();
 }
 
+void VolumeApp::initImGui()
+{
+    // 1. Create a descriptor pool just for ImGui
+    VkDescriptorPoolSize pool_sizes[] = {
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 100 },
+        { VK_DESCRIPTOR_TYPE_SAMPLER,                100 },
+        { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,          100 },
+    };
+    VkDescriptorPoolCreateInfo pool_info{};
+    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.poolSizeCount = static_cast<uint32_t>(std::size(pool_sizes));
+    pool_info.pPoolSizes = pool_sizes;
+    pool_info.maxSets = 100;
+    pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    if (vkCreateDescriptorPool(device->getDevice(), &pool_info, nullptr, &imguiDescriptorPool) != VK_SUCCESS)
+    {
+        throw std::runtime_error("Failed to create ImGui descriptor pool!");
+    }
+
+    // 2. Create the ImGui context
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    (void)io;
+
+    // 3. Initialize ImGui platform/renderer backends
+    ImGui::StyleColorsDark();
+    ImGui_ImplGlfw_InitForVulkan(window, true);
+
+    // Setup ImGui_ImplVulkan_InitInfo
+    ImGui_ImplVulkan_InitInfo initInfo = {};
+    initInfo.Instance = instance->getInstance();
+    initInfo.PhysicalDevice = device->getPhysicalDevice();
+    initInfo.Device = device->getDevice();
+    initInfo.QueueFamily = device->getGraphicsQueueFamilyIndex();
+    initInfo.Queue = device->getGraphicsQueue();
+    initInfo.DescriptorPool = imguiDescriptorPool;
+    initInfo.RenderPass = renderPass->getRenderPass();
+    initInfo.PipelineCache = VK_NULL_HANDLE;
+    initInfo.Subpass = 0;
+    initInfo.MinImageCount = 2;
+    initInfo.ImageCount = static_cast<uint32_t>(swapChain->getFramebuffers().size());
+    initInfo.MSAASamples = VK_SAMPLE_COUNT_1_BIT; // Adjust if you use MSAA
+    initInfo.Allocator = nullptr;
+    initInfo.CheckVkResultFn = nullptr;
+    ImGui_ImplVulkan_Init(&initInfo);
+
+    // 4. Upload fonts
+    ImGui_ImplVulkan_CreateFontsTexture();
+}
+
 void VolumeApp::createStorageImage() {
     VkFormat imageFormat = basalt::utils::findSupportedFormat(*device,
-        { VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM }, // Candidate formats
+        { VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM },
         VK_IMAGE_TILING_OPTIMAL,
         VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
 
@@ -261,7 +321,7 @@ void VolumeApp::createLightBuffers()
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
     );
 
-    // Buffer for the counter (uint)
+    // Buffer for the counter
     VkDeviceSize counterBufferSize = sizeof(LightCountBuffer);
     lightCounterBuffer = std::make_unique<basalt::Buffer>(
         *device, counterBufferSize,
@@ -271,29 +331,26 @@ void VolumeApp::createLightBuffers()
 }
 
 void VolumeApp::createDescriptorSetLayout() {
-    // Binding 0: Storage image for compute shader
+    // Binding 0: Storage image
     VkDescriptorSetLayoutBinding storageImageLayoutBinding{};
     storageImageLayoutBinding.binding = 0;
     storageImageLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     storageImageLayoutBinding.descriptorCount = 1;
     storageImageLayoutBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    storageImageLayoutBinding.pImmutableSamplers = nullptr;
 
-    // Binding 1: Combined image sampler for fragment shader
+    // Binding 1: Combined image sampler
     VkDescriptorSetLayoutBinding samplerLayoutBinding{};
     samplerLayoutBinding.binding = 1;
     samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     samplerLayoutBinding.descriptorCount = 1;
     samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    samplerLayoutBinding.pImmutableSamplers = nullptr;
 
-    // Binding 2: Storage buffer for NanoVDB grid
+    // Binding 2: Storage buffer for NanoVDB
     VkDescriptorSetLayoutBinding storageBufferLayoutBinding{};
     storageBufferLayoutBinding.binding = 2;
     storageBufferLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     storageBufferLayoutBinding.descriptorCount = 1;
     storageBufferLayoutBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    storageBufferLayoutBinding.pImmutableSamplers = nullptr;
 
     // Binding 3: Point lights buffer
     VkDescriptorSetLayoutBinding pointLightsBinding{};
@@ -315,7 +372,6 @@ void VolumeApp::createDescriptorSetLayout() {
     uniformBufferLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     uniformBufferLayoutBinding.descriptorCount = 1;
     uniformBufferLayoutBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    uniformBufferLayoutBinding.pImmutableSamplers = nullptr;
 
     std::vector<VkDescriptorSetLayoutBinding> bindings = {
         storageImageLayoutBinding,
@@ -334,7 +390,7 @@ void VolumeApp::createDescriptorPoolAndSet() {
         { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 },
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 },
         { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 },
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 }
     };
 
     descriptorPool = std::make_unique<basalt::DescriptorPool>(*device, 1, poolSizes);
@@ -357,7 +413,7 @@ void VolumeApp::createLightGenPipeline() {
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 
-    const VkDescriptorSetLayout layouts[] = { descriptorSetLayout->getLayout() };
+	const VkDescriptorSetLayout layouts[] = { descriptorSetLayout->getLayout() };
     pipelineLayoutInfo.setLayoutCount = 1;
     pipelineLayoutInfo.pSetLayouts = layouts;
 
@@ -372,7 +428,7 @@ void VolumeApp::createComputePipeline() {
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 
-    const VkDescriptorSetLayout layouts[] = { descriptorSetLayout->getLayout() };
+	const VkDescriptorSetLayout layouts[] = { descriptorSetLayout->getLayout() };
     pipelineLayoutInfo.setLayoutCount = 1;
     pipelineLayoutInfo.pSetLayouts = layouts;
 
@@ -398,9 +454,6 @@ void VolumeApp::createSampler() {
     samplerInfo.compareEnable = VK_FALSE;
     samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
     samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    samplerInfo.mipLodBias = 0.0f;
-    samplerInfo.minLod = 0.0f;
-    samplerInfo.maxLod = 0.0f;
 
     if (vkCreateSampler(device->getDevice(), &samplerInfo, nullptr, &sampler) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create sampler!");
@@ -410,7 +463,9 @@ void VolumeApp::createSampler() {
 void VolumeApp::createUniformBuffer()
 {
     VkDeviceSize bufferSize = sizeof(UBO);
-    uniformBuffer = std::make_unique<basalt::Buffer>(*device, bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    uniformBuffer = std::make_unique<basalt::Buffer>(*device, bufferSize,
+        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
     // Set UBO values
     uboData.frameCount = 0;
@@ -430,15 +485,10 @@ void VolumeApp::createUniformBuffer()
     uniformBuffer->updateBuffer(*commandPool, &uboData, sizeof(UBO));
 }
 
-
 void VolumeApp::createGraphicsPipeline() {
     // Empty vertex input state
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = 0;
-    vertexInputInfo.pVertexBindingDescriptions = nullptr;
-    vertexInputInfo.vertexAttributeDescriptionCount = 0;
-    vertexInputInfo.pVertexAttributeDescriptions = nullptr;
 
     // Create pipeline layout
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
@@ -462,11 +512,9 @@ void VolumeApp::createGraphicsPipeline() {
 }
 
 void VolumeApp::createCommandBuffers() {
-    // Allocate one command buffer per frame in flight
     commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         commandBuffers[i] = std::make_unique<basalt::CommandBuffer>(*device, *commandPool);
-        // Do not pre-record commands here
     }
 }
 
@@ -479,7 +527,6 @@ void VolumeApp::mainLoop() {
         glfwPollEvents();
         drawFrame();
     }
-
     vkDeviceWaitIdle(device->getDevice());
 }
 
@@ -496,7 +543,6 @@ double calculateRadius(double previousRadius) {
 }
 
 void VolumeApp::drawFrame() {
-    // Wait for the fence to be signaled before starting the frame
     syncObjects->waitForInFlightFence(currentFrame);
 
     uint32_t imageIndex;
@@ -510,47 +556,34 @@ void VolumeApp::drawFrame() {
         throw std::runtime_error("Failed to acquire swap chain image!");
     }
 
-    // Reset the fence to the unsignaled state
     syncObjects->resetInFlightFence(currentFrame);
 
-    // Record command buffer for the current frame
-    basalt::CommandBuffer& cmdBuffer = *commandBuffers[currentFrame];
-
-    // Update UBO:
+    // Update UBO
     uboData.frameCount++;
     uboData.beamRadius = calculateRadius(uboData.beamRadius);
 
     uniformBuffer->updateBuffer(*commandPool, &uboData, sizeof(UBO));
 
     // Begin recording
+    auto& cmdBuffer = *commandBuffers[currentFrame];
     cmdBuffer.begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
 
-    // Reset the light counter to zero before running light_gen
+    // Reset the light counter to zero
     vkCmdFillBuffer(
         *cmdBuffer.get(),
         lightCounterBuffer->getBuffer(),
         0,
         sizeof(LightCountBuffer),
-        0 // fill with zero
+        0
     );
 
-    // ---- First Compute Shader: light_gen ----
+    // 1) Light generation compute
     vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, lightGenPipeline->getPipeline());
-    vkCmdBindDescriptorSets(
-        *cmdBuffer.get(),
-        VK_PIPELINE_BIND_POINT_COMPUTE,
-        lightGenPipelineLayout,
-        0,
-        1,
-        &descriptorSet,
-        0,
-        nullptr
-    );
+    vkCmdBindDescriptorSets(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, lightGenPipelineLayout,
+        0, 1, &descriptorSet, 0, nullptr);
+    vkCmdDispatch(*cmdBuffer.get(), 1, 1, 1);
 
-    // Dispatch compute shader
-    vkCmdDispatch(*cmdBuffer.get(), 1, 1, 1);   // just one block of local size 4x4
-
-    // Insert memory barrier to ensure light data is written before the next compute shader
+    // Memory barrier
     VkMemoryBarrier memoryBarrier1{};
     memoryBarrier1.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     memoryBarrier1.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -561,31 +594,22 @@ void VolumeApp::drawFrame() {
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         0,
-        1,
+        1, 
         &memoryBarrier1,
         0, nullptr,
         0, nullptr
     );
 
-    // ---- Second Compute Shader: compute_gradient ----
+    // 2) Main compute pipeline
     vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline->getPipeline());
-    vkCmdBindDescriptorSets(
-        *cmdBuffer.get(),
-        VK_PIPELINE_BIND_POINT_COMPUTE,
-        computePipelineLayout,
-        0,
-        1,
-        &descriptorSet,
-        0,
-        nullptr
-    );
+    vkCmdBindDescriptorSets(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout,
+        0, 1, &descriptorSet, 0, nullptr);
 
-    // Dispatch compute shader with workgroup size (16x16)
-    const uint32_t groupCountX = (swapChain->getExtent().width + 15) / 16;
-    const uint32_t groupCountY = (swapChain->getExtent().height + 15) / 16;
+    uint32_t groupCountX = (swapChain->getExtent().width + 15) / 16;
+    uint32_t groupCountY = (swapChain->getExtent().height + 15) / 16;
     vkCmdDispatch(*cmdBuffer.get(), groupCountX, groupCountY, 1);
 
-    // Insert memory barrier to ensure compute shader writes are visible to the fragment shader
+    // Barrier to make image writes visible to fragment shader
     VkImageMemoryBarrier imageBarrier{};
     imageBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     imageBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -606,16 +630,13 @@ void VolumeApp::drawFrame() {
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
         0,
-        0,
-        nullptr,
-        0,
-        nullptr,
-        1,
-        &imageBarrier
+        0, nullptr,
+        0, nullptr,
+        1, &imageBarrier
     );
 
-    // ---- Graphics Pipeline: Render Pass ----
-    VkClearValue clearColor = { {0.0f, 0.0f, 0.0f, 1.0f} };
+    // 3) Begin render pass
+    VkClearValue clearColor = { { 0.0f, 0.0f, 0.0f, 1.0f } };
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     renderPassInfo.renderPass = renderPass->getRenderPass();
@@ -627,47 +648,44 @@ void VolumeApp::drawFrame() {
 
     vkCmdBeginRenderPass(*cmdBuffer.get(), &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    // Bind graphics pipeline
+    // Bind and draw your fullscreen pipeline
     vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline->getPipeline());
-
-    // Bind descriptor sets
-    vkCmdBindDescriptorSets(
-        *cmdBuffer.get(),
-        VK_PIPELINE_BIND_POINT_GRAPHICS,
-        graphicsPipelineLayout,
-        0,
-        1,
-        &descriptorSet,
-        0,
-        nullptr
-    );
-
-    // Draw fullscreen triangle (no vertex buffer needed)
+    vkCmdBindDescriptorSets(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout,
+        0, 1, &descriptorSet, 0, nullptr);
     vkCmdDraw(*cmdBuffer.get(), 3, 1, 0, 0);
 
-    // End render pass
+    // Now we begin an ImGui frame (Vulkan first, then GLFW).
+    // This matches the official example's recommended call order.
+    ImGui_ImplVulkan_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+
+    // Show the default demo window (for testing)
+    ImGui::ShowDemoWindow();
+
+    // Render all ImGui windows into the active render pass
+    ImGui::Render();
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), *cmdBuffer.get());
+
     vkCmdEndRenderPass(*cmdBuffer.get());
 
-    // End recording
+    // End command buffer
     cmdBuffer.end();
 
-    // ---- Submit Command Buffer ----
+    // Submit
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-    // Wait on the imageAvailableSemaphore
     VkSemaphore waitSemaphores[] = { syncObjects->getImageAvailableSemaphore(currentFrame) };
-    VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT };
+    VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
     submitInfo.waitSemaphoreCount = 1;
     submitInfo.pWaitSemaphores = waitSemaphores;
     submitInfo.pWaitDstStageMask = waitStages;
 
-    // Specify the command buffer to submit
     VkCommandBuffer submitCmdBuffer = *cmdBuffer.get();
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &submitCmdBuffer;
 
-    // Signal the renderFinishedSemaphore when the command buffer finishes
     VkSemaphore signalSemaphores[] = { syncObjects->getRenderFinishedSemaphore(currentFrame) };
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = signalSemaphores;
@@ -676,15 +694,12 @@ void VolumeApp::drawFrame() {
         throw std::runtime_error("Failed to submit draw command buffer!");
     }
 
-    // ---- Present the Image ----
+    // Present
     VkPresentInfoKHR presentInfo{};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-
-    // Wait on the renderFinishedSemaphore
     presentInfo.waitSemaphoreCount = 1;
     presentInfo.pWaitSemaphores = signalSemaphores;
 
-    // Specify the swapchain and image to present
     VkSwapchainKHR swapChains[] = { swapChain->getSwapChain() };
     presentInfo.swapchainCount = 1;
     presentInfo.pSwapchains = swapChains;
@@ -700,11 +715,11 @@ void VolumeApp::drawFrame() {
         throw std::runtime_error("Failed to present swap chain image!");
     }
 
-    // Advance to the next frame
     currentFrame = (currentFrame + 1) % syncObjects->getMaxFramesInFlight();
 }
 
 void VolumeApp::recreateSwapChain() {
+    uboData.frameCount = 0;
     int width = 0, height = 0;
     glfwGetFramebufferSize(window, &width, &height);
     while (width == 0 || height == 0) {
@@ -719,18 +734,43 @@ void VolumeApp::recreateSwapChain() {
     renderPass = std::make_unique<basalt::RenderPass>(*device, swapChain->getImageFormat());
     createStorageImage();
     updateDescriptorSet();
+    createLightGenPipeline();
     createComputePipeline();
     createGraphicsPipeline();
     swapChain->createFramebuffers(*renderPass);
     createCommandBuffers();
+
+    // Re-initialize the ImGui renderer to match the new swapchain size
+    ImGui_ImplVulkan_SetMinImageCount(2); // Keep in sync with your swapchain min image count
+    ImGui_ImplVulkan_Shutdown();
+    // Re-init
+    ImGui_ImplVulkan_InitInfo initInfo = {};
+    initInfo.Instance = instance->getInstance();
+    initInfo.PhysicalDevice = device->getPhysicalDevice();
+    initInfo.Device = device->getDevice();
+    initInfo.QueueFamily = device->getGraphicsQueueFamilyIndex();
+    initInfo.Queue = device->getGraphicsQueue();
+    initInfo.DescriptorPool = imguiDescriptorPool;
+    initInfo.RenderPass = renderPass->getRenderPass();
+    initInfo.PipelineCache = VK_NULL_HANDLE;
+    initInfo.Subpass = 0;
+    initInfo.MinImageCount = 2;
+    initInfo.ImageCount = static_cast<uint32_t>(swapChain->getFramebuffers().size());
+    initInfo.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    initInfo.Allocator = nullptr;
+    initInfo.CheckVkResultFn = nullptr;
+
+    ImGui_ImplVulkan_Init(&initInfo);
+
+    // Re-upload fonts
+    ImGui_ImplVulkan_CreateFontsTexture();
 }
 
 void VolumeApp::updateDescriptorSet() const
 {
-    // Update descriptor set
     std::array<VkWriteDescriptorSet, 6> descriptorWrites{};
 
-    // Binding 0: Storage image
+    // (0) Storage image
     VkDescriptorImageInfo storageImageInfo{};
     storageImageInfo.imageView = storageImageView;
     storageImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -742,7 +782,7 @@ void VolumeApp::updateDescriptorSet() const
     descriptorWrites[0].descriptorCount = 1;
     descriptorWrites[0].pImageInfo = &storageImageInfo;
 
-    // Binding 1: Combined image sampler
+    // (1) Combined image sampler
     VkDescriptorImageInfo samplerImageInfo{};
     samplerImageInfo.imageView = storageImageView;
     samplerImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -755,7 +795,7 @@ void VolumeApp::updateDescriptorSet() const
     descriptorWrites[1].descriptorCount = 1;
     descriptorWrites[1].pImageInfo = &samplerImageInfo;
 
-    // Binding 2: Storage buffer
+    // (2) NanoVDB buffer
     VkDescriptorBufferInfo bufferInfo{};
     bufferInfo.buffer = nanoVDBBuffer->getBuffer();
     bufferInfo.offset = 0;
@@ -768,7 +808,7 @@ void VolumeApp::updateDescriptorSet() const
     descriptorWrites[2].descriptorCount = 1;
     descriptorWrites[2].pBufferInfo = &bufferInfo;
 
-    // Binding 3: Light buffer
+    // (3) Point lights buffer
     VkDescriptorBufferInfo rayLightsBufferInfo{};
     rayLightsBufferInfo.buffer = rayLightsBuffer->getBuffer();
     rayLightsBufferInfo.offset = 0;
@@ -781,7 +821,7 @@ void VolumeApp::updateDescriptorSet() const
     descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     descriptorWrites[3].pBufferInfo = &rayLightsBufferInfo;
 
-    // Binding 4: Light count buffer
+    // (4) Light count buffer
     VkDescriptorBufferInfo lightCounterBufferInfo{};
     lightCounterBufferInfo.buffer = lightCounterBuffer->getBuffer();
     lightCounterBufferInfo.offset = 0;
@@ -794,7 +834,7 @@ void VolumeApp::updateDescriptorSet() const
     descriptorWrites[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     descriptorWrites[4].pBufferInfo = &lightCounterBufferInfo;
 
-    // Binding 5: Uniform buffer
+    // (5) Uniform buffer
     VkDescriptorBufferInfo uniformBufferInfo{};
     uniformBufferInfo.buffer = uniformBuffer->getBuffer();
     uniformBufferInfo.offset = 0;
@@ -807,108 +847,94 @@ void VolumeApp::updateDescriptorSet() const
     descriptorWrites[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     descriptorWrites[5].pBufferInfo = &uniformBufferInfo;
 
-    vkUpdateDescriptorSets(device->getDevice(), static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+    vkUpdateDescriptorSets(device->getDevice(),
+        static_cast<uint32_t>(descriptorWrites.size()),
+        descriptorWrites.data(),
+        0, nullptr);
 }
 
 void VolumeApp::cleanupSwapChain() {
     vkDeviceWaitIdle(device->getDevice());
 
-    // Destroy command buffers
     commandBuffers.clear();
 
-    // Destroy storage image and image view
     if (storageImageView != VK_NULL_HANDLE) {
         vkDestroyImageView(device->getDevice(), storageImageView, nullptr);
         storageImageView = VK_NULL_HANDLE;
     }
     storageImage.reset();
 
-    // Destroy pipelines first
     lightGenPipeline.reset();
     graphicsPipeline.reset();
     computePipeline.reset();
 
-    // Then destroy pipeline layouts
-    if (lightGenPipelineLayout != VK_NULL_HANDLE) {
+    if (lightGenPipelineLayout) {
         vkDestroyPipelineLayout(device->getDevice(), lightGenPipelineLayout, nullptr);
         lightGenPipelineLayout = VK_NULL_HANDLE;
     }
-    if (graphicsPipelineLayout != VK_NULL_HANDLE) {
+    if (graphicsPipelineLayout) {
         vkDestroyPipelineLayout(device->getDevice(), graphicsPipelineLayout, nullptr);
         graphicsPipelineLayout = VK_NULL_HANDLE;
     }
-    if (computePipelineLayout != VK_NULL_HANDLE) {
+    if (computePipelineLayout) {
         vkDestroyPipelineLayout(device->getDevice(), computePipelineLayout, nullptr);
         computePipelineLayout = VK_NULL_HANDLE;
     }
 
-    // Destroy framebuffers and render pass
     swapChain->cleanup();
     renderPass.reset();
-
-    // Destroy swap chain
     swapChain.reset();
 }
 
 void VolumeApp::cleanup() {
     vkDeviceWaitIdle(device->getDevice());
 
-    // Destroy storage image view if not already destroyed
+    ImGui_ImplVulkan_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+
+    if (imguiDescriptorPool) {
+        vkDestroyDescriptorPool(device->getDevice(), imguiDescriptorPool, nullptr);
+        imguiDescriptorPool = VK_NULL_HANDLE;
+    }
+
     if (storageImageView != VK_NULL_HANDLE) {
         vkDestroyImageView(device->getDevice(), storageImageView, nullptr);
         storageImageView = VK_NULL_HANDLE;
     }
 
-    // Destroy sampler
     if (sampler != VK_NULL_HANDLE) {
         vkDestroySampler(device->getDevice(), sampler, nullptr);
         sampler = VK_NULL_HANDLE;
     }
 
-    // Destroy pipelines and pipeline layouts
-    // (Already handled in cleanupSwapChain())
-
-    // Destroy the storage image
     storageImage.reset();
-
-    // Destroy buffers
     nanoVDBBuffer.reset();
     rayLightsBuffer.reset();
     lightCounterBuffer.reset();
     uniformBuffer.reset();
 
-    // Cleanup swap chain and other resources
     cleanupSwapChain();
 
-    // Destroy descriptor pool and set layout
     descriptorPool.reset();
     descriptorSetLayout.reset();
 
-    // Destroy command buffers
     commandBuffers.clear();
-
-    // Destroy command pool and synchronization objects
     commandPool.reset();
     syncObjects.reset();
 
-    // Destroy device, surface, and instance
     device.reset();
     surface.reset();
     instance.reset();
 
-    // Destroy window and terminate GLFW
     glfwDestroyWindow(window);
     glfwTerminate();
 }
 
 void VolumeApp::createNanoVDBBuffer() {
-    // Initialize OpenVDB
     openvdb::initialize();
-
-    // Specify the VDB file to read
     const std::string filename = "../../../../resources/bunny_cloud.vdb";
 
-    // Open the VDB file
     openvdb::io::File file(filename);
     try {
         file.open();
@@ -918,7 +944,6 @@ void VolumeApp::createNanoVDBBuffer() {
         throw std::runtime_error("Failed to open VDB file.");
     }
 
-    // Read the first FloatGrid from the file
     openvdb::GridBase::Ptr baseGrid_openvdb;
     openvdb::FloatGrid::Ptr grid_openvdb;
 
@@ -931,7 +956,6 @@ void VolumeApp::createNanoVDBBuffer() {
             break;
         }
     }
-
     file.close();
 
     if (!grid_openvdb) {
@@ -940,38 +964,30 @@ void VolumeApp::createNanoVDBBuffer() {
         throw std::runtime_error("Failed to find FloatGrid in VDB file.");
     }
 
-    // Create NanoVDB grid handle
+    // Create NanoVDB grid
     nanovdb::GridHandle<> handle = nanovdb::tools::createNanoGrid(*grid_openvdb);
-
-    // Get the data and size
     const void* gridData = handle.data();
     const size_t gridSize = handle.size();
 
-    // Create Vulkan buffer
     VkDeviceSize bufferSize = static_cast<VkDeviceSize>(gridSize);
 
-    // Create a buffer with usage VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
     nanoVDBBuffer = std::make_unique<basalt::Buffer>(
         *device,
         bufferSize,
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-    // Create a staging buffer to transfer data to device local memory
     basalt::Buffer stagingBuffer(
         *device,
         bufferSize,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
-    // Copy data to the staging buffer
     stagingBuffer.updateBuffer(*commandPool, gridData, bufferSize);
 
-    // Copy from staging buffer to device local buffer
     basalt::utils::copyBuffer(*device, *commandPool, device->getGraphicsQueue(),
         stagingBuffer.getBuffer(), nanoVDBBuffer->getBuffer(), bufferSize);
 
-    // Clean up OpenVDB
     openvdb::uninitialize();
 }
 
@@ -982,7 +998,7 @@ int main() {
     }
     catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
-        std::cin.get(); // wait before closing for debugging purposes
+        std::cin.get(); // pause for debugging
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;
