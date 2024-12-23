@@ -69,6 +69,8 @@ struct UBO {
     alignas(4) float rayMaxDistance;
     alignas(4) float rayMarchingStepSize;
     alignas(16) glm::vec3 lightSourceWorldPos;
+    alignas(4) float beamRadius;
+    alignas(4) float lightRayStepSize;
 };
 
 
@@ -422,6 +424,8 @@ void VolumeApp::createUniformBuffer()
     uboData.rayMaxDistance = 12000.0f;
     uboData.rayMarchingStepSize = 1.0f;
     uboData.lightSourceWorldPos = glm::vec3(-20.0, 15.0, -15.0);
+    uboData.beamRadius = 0.5f;
+    uboData.lightRayStepSize = 0.5f;
 
     uniformBuffer->updateBuffer(*commandPool, &uboData, sizeof(UBO));
 }
@@ -479,6 +483,18 @@ void VolumeApp::mainLoop() {
     vkDeviceWaitIdle(device->getDevice());
 }
 
+double calculateRadius(double previousRadius) {
+    double alpha = 1.0;         // Aggressiveness of radius reduction, user-defined
+    int photonCount = 4 * 4;    // Number of photons per pass
+
+    double squaredRadius = previousRadius * previousRadius;
+    for (int k = 1; k < photonCount; ++k) {
+        squaredRadius *= static_cast<double>(k + alpha) / k;
+    }
+    squaredRadius = std::pow(squaredRadius, 1.0 / photonCount);
+    return std::sqrt(squaredRadius);
+}
+
 void VolumeApp::drawFrame() {
     // Wait for the fence to be signaled before starting the frame
     syncObjects->waitForInFlightFence(currentFrame);
@@ -502,6 +518,7 @@ void VolumeApp::drawFrame() {
 
     // Update UBO:
     uboData.frameCount++;
+    uboData.beamRadius = calculateRadius(uboData.beamRadius);
 
     uniformBuffer->updateBuffer(*commandPool, &uboData, sizeof(UBO));
 

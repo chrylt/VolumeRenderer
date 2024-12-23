@@ -42,6 +42,8 @@ layout(std140, binding = 5) uniform UBO {
     float rayMaxDistance;
     float rayMarchingStepSize;
     vec3 lightSourceWorldPos;
+    float beamRadius;
+    float lightRayStepSize;
 };
 
 // NanoVDB buffer & code
@@ -189,27 +191,24 @@ bool intersectRayLights(in Ray ray){  // Visualize positions of point lights
 }
 
 vec3 getClosestPointOnSphere(vec3 sphereOrigin, float radius, vec3 refPosition){
-    // inspiration: https://wickedengine.net/2017/09/area-lights/
     return sphereOrigin + normalize(refPosition - sphereOrigin) * radius;
 }
+
 
 vec3 computeLightContribution(vec3 sampleWorldPos) {
     vec3 totalLight = vec3(0.0);
     for (int i = 0; i < lightCount; i++) {
 
-        float stepSize = 0.5f;
-        float sphereRadius = 0.5f / (frameCount * 0.1);
-
         vec3 rayLocal = lights[i].positionTo - lights[i].positionFrom;
         vec3 rayDir = normalize(rayLocal);
-        uint amountOfSteps = uint(length(rayLocal) / stepSize);
+        uint amountOfSteps = uint(length(rayLocal) / lightRayStepSize);
         float pointIntensity = lights[i].intensity / amountOfSteps;
 
         for(int s = 0; s < amountOfSteps; s++){    // march along ray light
 
-            vec3 sphereOrigin = lights[i].positionFrom + s * stepSize * rayDir;
+            vec3 sphereOrigin = lights[i].positionFrom + s * lightRayStepSize * rayDir;
 
-            vec3 currPosition = getClosestPointOnSphere(sphereOrigin, sphereRadius, sampleWorldPos); // turning it into sphere light
+            vec3 currPosition = getClosestPointOnSphere(sphereOrigin, beamRadius, sampleWorldPos); // turning it into sphere light
 
             vec3 L = currPosition - sampleWorldPos;
             float dist2 = dot(L, L);
