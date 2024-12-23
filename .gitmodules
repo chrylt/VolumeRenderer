@@ -5,3 +5,6 @@
 [submodule "external/openvdb"]
 	path = external/openvdb
 	url = https://github.com/AcademySoftwareFoundation/openvdb.git
+[submodule "external/imgui"]
+	path = external/imgui
+	url = https://github.com/chrylt/imgui.git
