@@ -44,6 +44,7 @@ layout(std140, binding = 5) uniform UBO {
     vec3 lightSourceWorldPos;
     float beamRadius;
     float lightRayStepSize;
+    float radiusFalloff;
 };
 
 // NanoVDB buffer & code

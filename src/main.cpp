@@ -75,6 +75,7 @@ struct UBO {
     alignas(16) glm::vec3 lightSourceWorldPos;
     alignas(4) float beamRadius;
     alignas(4) float lightRayStepSize;
+    alignas(4) float radiusFalloff;
 };
 
 
@@ -479,8 +480,9 @@ void VolumeApp::createUniformBuffer()
     uboData.rayMaxDistance = 12000.0f;
     uboData.rayMarchingStepSize = 1.0f;
     uboData.lightSourceWorldPos = glm::vec3(-20.0, 15.0, -15.0);
-    uboData.beamRadius = 0.5f;
-    uboData.lightRayStepSize = 0.5f;
+    uboData.beamRadius = 2.0f;
+    uboData.lightRayStepSize = 1.0f;
+    uboData.radiusFalloff = 2.0f;
 
     uniformBuffer->updateBuffer(*commandPool, &uboData, sizeof(UBO));
 }
@@ -530,8 +532,7 @@ void VolumeApp::mainLoop() {
     vkDeviceWaitIdle(device->getDevice());
 }
 
-double calculateRadius(double previousRadius) {
-    double alpha = 1.0;         // Aggressiveness of radius reduction, user-defined
+double calculateRadius(double previousRadius, double alpha) {
     int photonCount = 4 * 4;    // Number of photons per pass
 
     double squaredRadius = previousRadius * previousRadius;
@@ -604,6 +605,11 @@ void VolumeApp::drawFrame() {
     // Light source position
     ImGui::SliderFloat3("Light Source Pos", &uboData.lightSourceWorldPos.x, -100.0f, 100.0f);
 
+    // Radius Falloff
+    ImGui::SliderFloat("Beam Start Radius", &uboData.beamRadius, 0.0f, 10.0f);
+    ImGui::SliderFloat("Light Step Size", &uboData.lightRayStepSize, 0.0f, 10.0f);
+    ImGui::SliderFloat("Radius Falloff", &uboData.radiusFalloff, 0.0f, 10.0f);
+
     // Button to reset the frameCount
     if (ImGui::Button("Refresh")) {
         // Reset the frame count to zero
@@ -623,7 +629,7 @@ void VolumeApp::drawFrame() {
     // Increase frame counter each frame (unless user pressed Refresh).
     // If 'Refresh' was pressed, uboData.frameCount is already set to 0 above.
     uboData.frameCount++;
-    uboData.beamRadius = calculateRadius(uboData.beamRadius);
+    uboData.beamRadius = calculateRadius(uboData.beamRadius, uboData.radiusFalloff);
 
     uniformBuffer->updateBuffer(*commandPool, &uboData, sizeof(UBO));
 
