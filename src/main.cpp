@@ -542,7 +542,70 @@ void VolumeApp::drawFrame() {
 
     syncObjects->resetInFlightFence(currentFrame);
 
-    // Update UBO
+    // ---------------------------------
+    // ImGui: Start new frame
+    // ---------------------------------
+    ImGui_ImplVulkan_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+
+    // Optional: Show ImGui demo window
+    // ImGui::ShowDemoWindow();
+
+    // ---------------------------------
+    // Create our custom ImGui window
+    // ---------------------------------
+    ImGui::Begin("Settings");
+
+    // Camera position
+    ImGui::SliderFloat3("Camera Pos", &uboData.cameraPos.x, -200.0f, 200.0f);
+
+    // Field of View
+    ImGui::SliderFloat("FOV", &uboData.fov, 1.0f, 179.0f);
+
+    // Photon initial intensity
+    ImGui::SliderFloat("Photon Intensity", &uboData.photonInitialIntensity, 0.0f, 100.0f);
+
+    // Scattering probability
+    ImGui::SliderFloat("Scattering Probability", &uboData.scatteringProbability, 0.0f, 1.0f);
+
+    // Absorption coefficient
+    ImGui::SliderFloat("Absorption Coeff", &uboData.absorptionCoefficient, 0.0f, 1.0f);
+
+    // Max lights
+    // (Casting to int* inside DragInt, but be careful with large ranges)
+    int maxLightsTmp = static_cast<int>(uboData.maxLights);
+    if (ImGui::DragInt("Max Lights", &maxLightsTmp, 1.0f, 0, 1000000)) {
+        uboData.maxLights = static_cast<uint32_t>(maxLightsTmp);
+    }
+
+    // Ray max distance
+    ImGui::SliderFloat("Ray Max Dist", &uboData.rayMaxDistance, 0.0f, 20000.0f);
+
+    // Ray marching step size
+    ImGui::SliderFloat("Ray Step Size", &uboData.rayMarchingStepSize, 0.0f, 10.0f);
+
+    // Light source position
+    ImGui::SliderFloat3("Light Source Pos", &uboData.lightSourceWorldPos.x, -100.0f, 100.0f);
+
+    // Button to reset the frameCount
+    if (ImGui::Button("Refresh")) {
+        // Reset the frame count to zero
+        uboData.frameCount = 0;
+    }
+
+    ImGui::End();
+
+    // ---------------------------------
+    // End ImGui frame (but don't render yet)
+    // ---------------------------------
+    ImGui::Render();
+
+    // ---------------------------------
+    // UBO update
+    // ---------------------------------
+    // Increase frame counter each frame (unless user pressed Refresh).
+    // If 'Refresh' was pressed, uboData.frameCount is already set to 0 above.
     uboData.frameCount++;
     uniformBuffer->updateBuffer(*commandPool, &uboData, sizeof(UBO));
 
@@ -570,14 +633,12 @@ void VolumeApp::drawFrame() {
     memoryBarrier1.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     memoryBarrier1.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     memoryBarrier1.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-
     vkCmdPipelineBarrier(
         *cmdBuffer.get(),
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         0,
-        1, 
-        &memoryBarrier1,
+        1, &memoryBarrier1,
         0, nullptr,
         0, nullptr
     );
@@ -586,7 +647,6 @@ void VolumeApp::drawFrame() {
     vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline->getPipeline());
     vkCmdBindDescriptorSets(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout,
         0, 1, &descriptorSet, 0, nullptr);
-
     uint32_t groupCountX = (swapChain->getExtent().width + 15) / 16;
     uint32_t groupCountY = (swapChain->getExtent().height + 15) / 16;
     vkCmdDispatch(*cmdBuffer.get(), groupCountX, groupCountY, 1);
@@ -606,7 +666,6 @@ void VolumeApp::drawFrame() {
     imageBarrier.subresourceRange.levelCount = 1;
     imageBarrier.subresourceRange.baseArrayLayer = 0;
     imageBarrier.subresourceRange.layerCount = 1;
-
     vkCmdPipelineBarrier(
         *cmdBuffer.get(),
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -630,23 +689,13 @@ void VolumeApp::drawFrame() {
 
     vkCmdBeginRenderPass(*cmdBuffer.get(), &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    // Bind and draw your fullscreen pipeline
+    // 4) Fullscreen graphics pipeline
     vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline->getPipeline());
     vkCmdBindDescriptorSets(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout,
         0, 1, &descriptorSet, 0, nullptr);
     vkCmdDraw(*cmdBuffer.get(), 3, 1, 0, 0);
 
-    // Now we begin an ImGui frame (Vulkan first, then GLFW).
-    // This matches the official example's recommended call order.
-    ImGui_ImplVulkan_NewFrame();
-    ImGui_ImplGlfw_NewFrame();
-    ImGui::NewFrame();
-
-    // Show the default demo window (for testing)
-    ImGui::ShowDemoWindow();
-
-    // Render all ImGui windows into the active render pass
-    ImGui::Render();
+    // 5) Render ImGui into this render pass
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), *cmdBuffer.get());
 
     vkCmdEndRenderPass(*cmdBuffer.get());
@@ -681,7 +730,6 @@ void VolumeApp::drawFrame() {
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     presentInfo.waitSemaphoreCount = 1;
     presentInfo.pWaitSemaphores = signalSemaphores;
-
     VkSwapchainKHR swapChains[] = { swapChain->getSwapChain() };
     presentInfo.swapchainCount = 1;
     presentInfo.pSwapchains = swapChains;
