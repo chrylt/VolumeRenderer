@@ -647,11 +647,21 @@ void VolumeApp::drawFrame() {
     // ---------------------------------
     ImGui::Begin("Settings");
 
+    { // Switch algorithms
+        static const char* algorithmNames[] = { "Beam", "Ray", "Point", "Sphere", "Path" };
+        int currentItem = static_cast<int>(currentAlgorithm);
+        if (ImGui::Combo("Algorithm", &currentItem, algorithmNames, IM_ARRAYSIZE(algorithmNames))) {
+            currentAlgorithm = static_cast<Algorithms>(currentItem);
+            // Reset the frame counter when changing algorithms
+            uboData.frameCount = 0;
+        }
+    }
+
     // Camera position
     ImGui::SliderFloat3("Camera Pos", &uboData.cameraPos.x, -200.0f, 200.0f);
 
     // Field of View
-    ImGui::SliderFloat("FOV", &uboData.fov, 1.0f, 179.0f);
+    //ImGui::SliderFloat("FOV", &uboData.fov, 1.0f, 179.0f);
 
     // Photon initial intensity
     ImGui::SliderFloat("Photon Intensity", &uboData.photonInitialIntensity, 0.0f, 100.0f);
