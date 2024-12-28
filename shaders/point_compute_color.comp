@@ -1,0 +1,148 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+
+#include "common.h"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(binding = 0, rgba8) uniform image2D img;
+
+layout(std430, binding = 3) buffer PointLightBuffer {
+    RayLight lights[];
+};
+
+layout(std430, binding = 4) buffer LightCounterBuffer {
+    uint lightCount;
+    uint debug;
+};
+
+layout(std140, binding = 5) uniform UBO {
+    uint frameCount;
+    uvec2 framebufferDim;
+    vec3 cameraPos;
+    float fov;
+    float photonInitialIntensity;
+    float scatteringProbability;
+    float absorptionCoefficient;
+    uint maxLights;
+    float rayMaxDistance;
+    float rayMarchingStepSize;
+    vec3 lightSourceWorldPos;
+    float beamRadius;
+    float lightRayStepSize;
+    float radiusFalloff;
+};
+
+// NanoVDB buffer & code
+layout(binding = 2) readonly buffer NanoVDBBuffer {
+    uint pnanovdb_buf_data[];
+};
+
+#include "common_nanovdb.h"
+
+#include "common_functions.h"
+
+vec3 computeLightContribution(vec3 sampleWorldPos) {
+    vec3 totalLight = vec3(0.0);
+    for (int i = 0; i < lightCount; i++) {
+
+        vec3 currPosition = lights[i].positionTo;
+        float pointIntensity = lights[i].intensity;
+
+        vec3 L = currPosition - sampleWorldPos;
+        float dist2 = dot(L, L);
+        if (dist2 < 0.0001) continue; // guard against division by zero
+        float dist = sqrt(dist2);
+        float attenuation = pointIntensity / (4.0 * M_PI * dist2);
+        totalLight += attenuation * vec3(1.0); // assuming white lights
+    }
+    return totalLight;
+}
+
+void main() {
+    initNanoVolume();
+
+    ivec2 pixelCoords = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 imageSize = imageSize(img);
+
+    float u = float(pixelCoords.x) / float(imageSize.x);
+    float v = float(pixelCoords.y) / float(imageSize.y);
+
+    uint width = framebufferDim.x;
+    uint height = framebufferDim.y;
+    float aspectRatio = float(width) / float(height);
+    float scale = tan(fov * 0.5 * M_PI / 180.0);
+
+    float x = (2 * (pixelCoords.x + 0.5) / width - 1) * aspectRatio * scale;
+    float y = (1 - 2 * (pixelCoords.y + 0.5) / height) * scale;
+
+    Ray ray;
+    ray.origin = cameraPos;
+    ray.direction = normalize(vec3(x, y, 1.0));
+    ray.minDistance = 0.0;
+    ray.maxDistance = rayMaxDistance;
+
+    // Transform ray into local index space
+    pnanovdb_vec3_t oIndex = pnanovdb_grid_world_to_indexf(discarded, gridHandle, pnanovdb_vec3_t(ray.origin.x, ray.origin.y, ray.origin.z));
+    pnanovdb_vec3_t dIndex = pnanovdb_grid_world_to_index_dirf(discarded, gridHandle, pnanovdb_vec3_t(ray.direction.x, ray.direction.y, ray.direction.z));
+    
+    vec3 rayOriginLocal = vec3(oIndex.x, oIndex.y, oIndex.z);
+    vec3 rayDirLocal = normalize(vec3(dIndex.x, dIndex.y, dIndex.z));
+
+    pnanovdb_tree_handle_t tree = pnanovdb_grid_get_tree(discarded, gridHandle);
+    pnanovdb_root_handle_t root = pnanovdb_tree_get_root(discarded, tree);
+
+    pnanovdb_coord_t bboxMinI = pnanovdb_root_get_bbox_min(discarded, root);
+    pnanovdb_coord_t bboxMaxI = pnanovdb_root_get_bbox_max(discarded, root);
+
+    vec3 boxMin = vec3(bboxMinI.x, bboxMinI.y, bboxMinI.z);
+    vec3 boxMax = vec3(bboxMaxI.x + 1, bboxMaxI.y + 1, bboxMaxI.z + 1);
+
+    float tmin = ray.minDistance;
+    float tmax = ray.maxDistance;
+    bool hitVolume = intersectAABB(rayOriginLocal, rayDirLocal, boxMin, boxMax, tmin, tmax);
+
+    vec3 finalColor = vec3(0.0);
+    if (hitVolume && tmax > 0.0) {
+        tmin = max(tmin, 0.0);
+        float stepSize = rayMarchingStepSize;
+        float t = tmin;
+        
+        float T = 1.0; // transmittance
+
+        while (t < tmax && T > 0.001) {
+            vec3 pLocal = rayOriginLocal + rayDirLocal * t;
+            
+            // Convert pLocal back to world space for correct lighting calculations
+            pnanovdb_vec3_t pWorldNano = pnanovdb_grid_index_to_worldf(discarded, gridHandle, pnanovdb_vec3_t(pLocal.x, pLocal.y, pLocal.z));
+            vec3 pWorld = vec3(pWorldNano.x, pWorldNano.y, pWorldNano.z);
+
+            ivec3 ijk = ivec3(floor(pLocal.x), floor(pLocal.y), floor(pLocal.z));
+
+            if (ijk.x >= bboxMinI.x && ijk.y >= bboxMinI.y && ijk.z >= bboxMinI.z &&
+                ijk.x <= bboxMaxI.x && ijk.y <= bboxMaxI.y && ijk.z <= bboxMaxI.z) {
+
+                pnanovdb_address_t addr = pnanovdb_readaccessor_get_value_address(gridType, discarded, accessor, ijk);
+                float val = pnanovdb_read_float(discarded, addr);
+
+                // Compute incoming light at this point in world space
+                vec3 lightIncoming = computeLightContribution(pWorld);
+
+                vec3 dC = T * val * stepSize * lightIncoming;
+                finalColor += dC;
+
+                float attenuation = exp(-val * absorptionCoefficient * stepSize);
+                T *= attenuation;
+            }
+
+            t += stepSize;
+        }
+    }
+
+    vec3 frameColor = clamp(finalColor / float(lightCount), 0.0, 1.0);
+
+    vec3 previousColor = imageLoad(img, pixelCoords).rgb;
+
+    vec4 newColor = vec4((previousColor * (frameCount - 1) + frameColor) / frameCount, 1);
+
+    imageStore(img, pixelCoords, newColor);
+}

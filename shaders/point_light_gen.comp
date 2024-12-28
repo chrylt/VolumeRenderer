@@ -1,0 +1,195 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_scalar_block_layout : require
+
+#define M_PI       3.14159265358979323846
+
+layout(local_size_x = 4, local_size_y = 4) in;
+
+struct RayLight {
+    vec3 positionFrom;
+    vec3 positionTo;
+    float intensity;
+};
+
+layout(std430, binding = 3) buffer PointLightBuffer {
+    RayLight lights[];
+};
+
+layout(std430, binding = 4) buffer LightCounterBuffer {
+    uint lightCount;
+    uint debug;
+};
+
+layout(std140, binding = 5) uniform UBO {
+    uint frameCount;
+    uvec2 framebufferDim;
+    vec3 cameraPos;
+    float fov;
+    float photonInitialIntensity;
+    float scatteringProbability;
+    float absorptionCoefficient;
+    uint maxLights;
+    float rayMaxDistance;
+    float rayMarchingStepSize;
+    vec3 lightSourceWorldPos;
+};
+
+// NanoVDB buffer & code
+layout(binding = 2) readonly buffer NanoVDBBuffer {
+    uint pnanovdb_buf_data[];
+};
+
+#include "PNanoVDB_GLSL.h"
+pnanovdb_buf_t discarded = {0};   
+pnanovdb_uint32_t gridType;
+pnanovdb_readaccessor_t accessor;
+pnanovdb_grid_handle_t gridHandle;
+
+// Random number generator (simple hash-based PCG Family)
+uint hash(uvec3 v) {
+    uint x = v.x * 73856093u;
+    uint y = v.y * 19349663u;
+    uint z = v.z * 83492791u;
+    uint hash = x ^ y ^ z;
+    hash = (hash ^ (hash >> 16u)) * 0x45d9f3b;
+    hash = (hash ^ (hash >> 16u)) * 0x45d9f3b;
+    hash = hash ^ (hash >> 16u);
+    return hash;
+}
+float randf(uvec3 seed) {
+    return float(hash(seed)) * (1.0/4294967295.0);
+}
+
+float randf_inc(inout uvec3 seed){
+    seed += uvec3(1,1,1);
+    return randf(seed);
+}
+
+void initNanoVolume() {
+    pnanovdb_address_t address;
+    address.byte_offset = 0;
+    gridHandle.address = address;
+
+    pnanovdb_tree_handle_t treeHandle = pnanovdb_grid_get_tree(discarded, gridHandle);
+    pnanovdb_root_handle_t rootHandle = pnanovdb_tree_get_root(discarded, treeHandle);
+    pnanovdb_readaccessor_init(accessor, rootHandle);
+    gridType = pnanovdb_grid_get_grid_type(discarded, gridHandle);
+}
+
+struct Ray {
+    vec3 origin;
+    vec3 direction;
+    float minDistance;
+    float maxDistance;
+};
+
+bool intersectAABB(vec3 origin, vec3 dir, vec3 boxMin, vec3 boxMax, inout float tmin, inout float tmax) {
+    for (int i = 0; i < 3; i++) {
+        float invD = 1.0 / dir[i];
+        float t0 = (boxMin[i] - origin[i]) * invD;
+        float t1 = (boxMax[i] - origin[i]) * invD;
+        if (invD < 0.0) { float temp = t0; t0 = t1; t1 = temp; }
+        tmin = max(tmin, t0);
+        tmax = min(tmax, t1);
+        if (tmax < tmin) return false;
+    }
+    return true;
+}
+
+vec3 randomDir(float r1, float r2){
+    float theta = acos(1.0 - 2.0 * r1);
+    float phi = 2.0 * M_PI * r2;
+    return normalize(vec3(sin(theta)*cos(phi), sin(theta)*sin(phi), cos(theta)));
+}
+
+void main() {
+    initNanoVolume();
+
+    // Each thread can emit one photon or multiple photons.
+    // For simplicity, one photon per thread.
+    uvec3 gid = gl_GlobalInvocationID;
+    uvec3 seed = uvec3(gid.x, gid.y, gid.z) * frameCount;
+
+    // Example: Start photons from a single directional "light" region or point.
+    // Here we start photons from a single point:
+    vec3 photonOriginWorld = lightSourceWorldPos;
+    
+    // Random direction in hemisphere:
+    vec3 photonDirWorld = randomDir(randf_inc(seed), randf_inc(seed));
+
+    // Convert to index space
+    pnanovdb_vec3_t oIndex = pnanovdb_grid_world_to_indexf(discarded, gridHandle, pnanovdb_vec3_t(photonOriginWorld.x, photonOriginWorld.y, photonOriginWorld.z));
+    pnanovdb_vec3_t dIndex = pnanovdb_grid_world_to_index_dirf(discarded, gridHandle, pnanovdb_vec3_t(photonDirWorld.x, photonDirWorld.y, photonDirWorld.z));
+    
+    vec3 rayOriginLocal = vec3(oIndex.x, oIndex.y, oIndex.z);
+    vec3 rayDirLocal = normalize(vec3(dIndex.x, dIndex.y, dIndex.z));
+
+    pnanovdb_tree_handle_t tree = pnanovdb_grid_get_tree(discarded, gridHandle);
+    pnanovdb_root_handle_t root = pnanovdb_tree_get_root(discarded, tree);
+
+    pnanovdb_coord_t bboxMinI = pnanovdb_root_get_bbox_min(discarded, root);
+    pnanovdb_coord_t bboxMaxI = pnanovdb_root_get_bbox_max(discarded, root);
+    vec3 boxMin = vec3(bboxMinI.x, bboxMinI.y, bboxMinI.z);
+    vec3 boxMax = vec3(bboxMaxI.x + 1, bboxMaxI.y + 1, bboxMaxI.z + 1);
+
+    float tmin = 0.0;
+    float tmax = rayMaxDistance; // max distance
+    bool hitVolume = intersectAABB(rayOriginLocal, rayDirLocal, boxMin, boxMax, tmin, tmax);
+
+    float stepSize = rayMarchingStepSize;
+    float T = 1.0; // transmittance starts at 100%
+    float currentT = tmin;
+    vec3 currentPosLocal = rayOriginLocal + rayDirLocal * tmin;
+    float photonIntensity = photonInitialIntensity;
+
+    vec3 previousPosition = photonOriginWorld;
+    
+    while (hitVolume && currentT < tmax && T > 0.001 && photonIntensity > 0.01) {
+        
+        ivec3 ijk = ivec3(floor(currentPosLocal.x), floor(currentPosLocal.y), floor(currentPosLocal.z));
+        if (ijk.x >= bboxMinI.x && ijk.y >= bboxMinI.y && ijk.z >= bboxMinI.z &&
+            ijk.x <= bboxMaxI.x && ijk.y <= bboxMaxI.y && ijk.z <= bboxMaxI.z) {
+
+            pnanovdb_address_t addr = pnanovdb_readaccessor_get_value_address(gridType, discarded, accessor, ijk);
+            float val = pnanovdb_read_float(discarded, addr);
+
+            if (val > 0.0) {
+                
+                // Attenuate photon
+                float attenuation = exp(-val * absorptionCoefficient * stepSize);
+                photonIntensity *= attenuation;
+                T *= attenuation;
+
+                // Decide if we scatter
+                float bounceRoll = randf_inc(seed);
+                if (bounceRoll < scatteringProbability) {
+                
+                    // Photon bounces: pick a new random direction
+                    vec3 newDirLocal = randomDir(randf_inc(seed), randf_inc(seed));
+
+                    // Convert local position to world to store a light
+                    pnanovdb_vec3_t pWorldNano = pnanovdb_grid_index_to_worldf(discarded, gridHandle, pnanovdb_vec3_t(currentPosLocal.x, currentPosLocal.y, currentPosLocal.z));
+                    vec3 newLightPosWorld = vec3(pWorldNano.x, pWorldNano.y, pWorldNano.z);
+
+                    // Append a new point light to the buffer
+                    uint index = atomicAdd(lightCount, 1);
+                    if (index < maxLights) {
+                        lights[index].positionFrom = previousPosition;
+                        lights[index].positionTo = newLightPosWorld;
+                        lights[index].intensity = photonIntensity;
+                        previousPosition = newLightPosWorld;
+                    }else{
+                        lightCount = maxLights;
+                    }
+
+                    // Update photon direction
+                    rayDirLocal = newDirLocal;
+                }
+            }
+        }
+
+        currentT += stepSize;
+        currentPosLocal = rayOriginLocal + rayDirLocal * currentT;
+    }
+}

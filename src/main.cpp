@@ -44,10 +44,29 @@ constexpr uint32_t HEIGHT = 1024;
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 // Paths to compiled shader modules
-const std::string LIGHT_GEN_PATH = "shaders/compiled_shaders/light_gen.comp.spv";
-const std::string COMPUTE_SHADER_PATH = "shaders/compiled_shaders/compute_color.comp.spv";
+const std::string BEAM_LIGHT_GEN_PATH = "shaders/compiled_shaders/beam_light_gen.comp.spv";
+const std::string BEAM_COMPUTE_SHADER_PATH = "shaders/compiled_shaders/beam_compute_color.comp.spv";
+
+const std::string RAY_LIGHT_GEN_PATH = "shaders/compiled_shaders/ray_light_gen.comp.spv";
+const std::string RAY_COMPUTE_SHADER_PATH = "shaders/compiled_shaders/ray_compute_color.comp.spv";
+
+const std::string POINT_LIGHT_GEN_PATH = "shaders/compiled_shaders/point_light_gen.comp.spv";
+const std::string POINT_COMPUTE_SHADER_PATH = "shaders/compiled_shaders/point_compute_color.comp.spv";
+
+const std::string SPHERE_LIGHT_GEN_PATH = "shaders/compiled_shaders/sphere_light_gen.comp.spv";
+const std::string SPHERE_COMPUTE_SHADER_PATH = "shaders/compiled_shaders/sphere_compute_color.comp.spv";
+
+const std::string PATH_LIGHT_GEN_PATH = "shaders/compiled_shaders/path_light_gen.comp.spv";
+const std::string PATH_COMPUTE_SHADER_PATH = "shaders/compiled_shaders/path_compute_color.comp.spv";
+
 const std::string VERT_SHADER_PATH = "shaders/compiled_shaders/fullscreen.vert.spv";
 const std::string FRAG_SHADER_PATH = "shaders/compiled_shaders/sample_image.frag.spv";
+
+enum Algorithms
+{
+	BEAM, RAY, POINT, SPHERE, PATH
+};
+
 
 struct RayLight {
     glm::vec3 positionFrom;
@@ -96,6 +115,9 @@ private:
     // Window
     GLFWwindow* window;
 
+    // State
+    Algorithms currentAlgorithm = SPHERE;
+
     // Vulkan components
     std::unique_ptr<basalt::Instance> instance;
     std::unique_ptr<basalt::Surface> surface;
@@ -103,8 +125,16 @@ private:
     std::unique_ptr<basalt::SwapChain> swapChain;
     std::unique_ptr<basalt::RenderPass> renderPass;
     std::unique_ptr<basalt::GraphicsPipeline> graphicsPipeline;
-    std::unique_ptr<basalt::ComputePipeline> computePipeline;
-    std::unique_ptr<basalt::ComputePipeline> lightGenPipeline;
+    std::unique_ptr<basalt::ComputePipeline> beamLightGenPipeline;
+    std::unique_ptr<basalt::ComputePipeline> beamComputeColorPipeline;
+    std::unique_ptr<basalt::ComputePipeline> rayLightGenPipeline;
+    std::unique_ptr<basalt::ComputePipeline> rayComputeColorPipeline;
+    std::unique_ptr<basalt::ComputePipeline> pointLightGenPipeline;
+    std::unique_ptr<basalt::ComputePipeline> pointComputeColorPipeline;
+    std::unique_ptr<basalt::ComputePipeline> sphereLightGenPipeline;
+    std::unique_ptr<basalt::ComputePipeline> sphereComputeColorPipeline;
+    std::unique_ptr<basalt::ComputePipeline> pathLightGenPipeline;
+    std::unique_ptr<basalt::ComputePipeline> pathComputeColorPipeline;
     std::unique_ptr<basalt::CommandPool> commandPool;
     std::unique_ptr<basalt::SyncObjects> syncObjects;
 
@@ -156,6 +186,41 @@ private:
     void createSampler();
     void createNanoVDBBuffer();
     void createUniformBuffer();
+
+    // State
+    VkPipeline getCurrentLightGenVkPipeline() const
+    {
+	    switch(currentAlgorithm)
+	    {
+	    case BEAM:
+            return beamLightGenPipeline->getPipeline();
+	    case RAY:
+            return rayLightGenPipeline->getPipeline();
+	    case POINT:
+            return pointLightGenPipeline->getPipeline();
+	    case SPHERE:
+            return sphereLightGenPipeline->getPipeline();
+	    default:
+            return beamLightGenPipeline->getPipeline();
+	    }
+    }
+
+    VkPipeline getCurrentComputeColorVkPipeline() const
+    {
+        switch (currentAlgorithm)
+        {
+        case BEAM:
+            return beamComputeColorPipeline->getPipeline();
+        case RAY:
+            return rayComputeColorPipeline->getPipeline();
+        case POINT:
+            return pointComputeColorPipeline->getPipeline();
+        case SPHERE:
+            return sphereComputeColorPipeline->getPipeline();
+        default:
+            return beamComputeColorPipeline->getPipeline();
+        }
+    }
 
     // Rendering loop
     void mainLoop();
@@ -422,7 +487,11 @@ void VolumeApp::createLightGenPipeline() {
         throw std::runtime_error("Failed to create lightGen pipeline layout!");
     }
 
-    lightGenPipeline = std::make_unique<basalt::ComputePipeline>(*device, LIGHT_GEN_PATH, lightGenPipelineLayout);
+    beamLightGenPipeline = std::make_unique<basalt::ComputePipeline>(*device, BEAM_LIGHT_GEN_PATH, lightGenPipelineLayout);
+    rayLightGenPipeline = std::make_unique<basalt::ComputePipeline>(*device, RAY_LIGHT_GEN_PATH, lightGenPipelineLayout);
+    pointLightGenPipeline = std::make_unique<basalt::ComputePipeline>(*device, POINT_LIGHT_GEN_PATH, lightGenPipelineLayout);
+    sphereLightGenPipeline = std::make_unique<basalt::ComputePipeline>(*device, SPHERE_LIGHT_GEN_PATH, lightGenPipelineLayout);
+    pathLightGenPipeline = std::make_unique<basalt::ComputePipeline>(*device, PATH_LIGHT_GEN_PATH, lightGenPipelineLayout);
 }
 
 void VolumeApp::createComputePipeline() {
@@ -437,7 +506,11 @@ void VolumeApp::createComputePipeline() {
         throw std::runtime_error("Failed to create compute pipeline layout!");
     }
 
-    computePipeline = std::make_unique<basalt::ComputePipeline>(*device, COMPUTE_SHADER_PATH, computePipelineLayout);
+    beamComputeColorPipeline = std::make_unique<basalt::ComputePipeline>(*device, BEAM_COMPUTE_SHADER_PATH, computePipelineLayout);
+    rayComputeColorPipeline = std::make_unique<basalt::ComputePipeline>(*device, RAY_COMPUTE_SHADER_PATH, computePipelineLayout);
+    pointComputeColorPipeline = std::make_unique<basalt::ComputePipeline>(*device, POINT_COMPUTE_SHADER_PATH, computePipelineLayout);
+    sphereComputeColorPipeline = std::make_unique<basalt::ComputePipeline>(*device, SPHERE_COMPUTE_SHADER_PATH, computePipelineLayout);
+    pathComputeColorPipeline = std::make_unique<basalt::ComputePipeline>(*device, PATH_COMPUTE_SHADER_PATH, computePipelineLayout);
 }
 
 void VolumeApp::createSampler() {
@@ -647,7 +720,7 @@ void VolumeApp::drawFrame() {
     );
 
     // 1) Light generation compute
-    vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, lightGenPipeline->getPipeline());
+    vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, getCurrentLightGenVkPipeline());
     vkCmdBindDescriptorSets(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, lightGenPipelineLayout,
         0, 1, &descriptorSet, 0, nullptr);
     vkCmdDispatch(*cmdBuffer.get(), 1, 1, 1);
@@ -668,7 +741,7 @@ void VolumeApp::drawFrame() {
     );
 
     // 2) Main compute pipeline
-    vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline->getPipeline());
+    vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, getCurrentComputeColorVkPipeline());
     vkCmdBindDescriptorSets(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout,
         0, 1, &descriptorSet, 0, nullptr);
     uint32_t groupCountX = (swapChain->getExtent().width + 15) / 16;
@@ -918,9 +991,17 @@ void VolumeApp::cleanupSwapChain() {
     }
     storageImage.reset();
 
-    lightGenPipeline.reset();
+    beamLightGenPipeline.reset();
+    beamComputeColorPipeline.reset();
+    rayLightGenPipeline.reset();
+    rayComputeColorPipeline.reset();
+    pointLightGenPipeline.reset();
+    pointComputeColorPipeline.reset();
+    sphereLightGenPipeline.reset();
+    sphereComputeColorPipeline.reset();
+    pathLightGenPipeline.reset();
+    pathComputeColorPipeline.reset();
     graphicsPipeline.reset();
-    computePipeline.reset();
 
     if (lightGenPipelineLayout) {
         vkDestroyPipelineLayout(device->getDevice(), lightGenPipelineLayout, nullptr);
