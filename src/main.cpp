@@ -201,7 +201,7 @@ private:
 	    case SPHERE:
             return sphereLightGenPipeline->getPipeline();
 	    default:
-            return beamLightGenPipeline->getPipeline();
+            return pathLightGenPipeline->getPipeline();
 	    }
     }
 
@@ -218,7 +218,7 @@ private:
         case SPHERE:
             return sphereComputeColorPipeline->getPipeline();
         default:
-            return beamComputeColorPipeline->getPipeline();
+            return pathComputeColorPipeline->getPipeline();
         }
     }
 

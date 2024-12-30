@@ -70,6 +70,37 @@ bool intersectSphere(in Ray ray, in vec3 sphereCenter, in float sphereRadius, ou
     return true;
 }
 
+bool intersectSphere(in vec3 rayOrigin, in vec3 rayDir, in vec3 sphereCenter, in float sphereRadius, out float t)
+{
+    vec3 oc = rayOrigin - sphereCenter;
+    float b = dot(oc, rayDir);
+    float c = dot(oc, oc) - sphereRadius * sphereRadius;
+    float discriminant = b * b - c;
+
+    if (discriminant < 0.0) {
+        // No intersection
+        return false;
+    }
+
+    float sqrtDisc = sqrt(discriminant);
+    float t0 = -b - sqrtDisc;
+    float t1 = -b + sqrtDisc;
+
+    // We want the closest positive t
+    if (t0 > 0.0) {
+        t = t0;
+    }
+    else if (t1 > 0.0) {
+        t = t1;
+    }
+    else {
+        // Both intersections are behind the ray origin
+        return false;
+    }
+
+    return true;
+}
+
 bool intersectThickRay(
     vec3 cameraPos,
     vec3 cameraDir,
@@ -150,4 +181,21 @@ bool intersectRayLights(in Ray ray) {  // Visualize positions of point lights
 
 vec3 getClosestPointOnSphere(vec3 sphereOrigin, float radius, vec3 refPosition) {
     return sphereOrigin + normalize(refPosition - sphereOrigin) * radius;
+}
+
+vec3 getPointLightContribution(vec3 incomingPos, vec3 lightPos, float lightIntensity) {
+
+    vec3 L = lightPos - incomingPos;
+    float dist2 = dot(L, L);
+    if (dist2 < 0.0001) return vec3(0); // guard against division by zero
+    float dist = sqrt(dist2);
+    float attenuation = lightIntensity / (4.0 * M_PI * dist2);
+    return attenuation * vec3(1.0); // assuming white lights
+}
+
+vec3 getSphereLightContribution(vec3 incomingPos, vec3 sphereOrigin, float lightIntensity) {
+
+    vec3 currPosition = getClosestPointOnSphere(sphereOrigin, beamRadius, incomingPos); // turning it into sphere light
+
+    return getPointLightContribution(incomingPos, currPosition, lightIntensity);
 }

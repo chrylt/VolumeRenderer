@@ -18,14 +18,7 @@ vec3 computeLightContribution(vec3 sampleWorldPos) {
 
             vec3 sphereOrigin = lights[i].positionFrom + s * lightRayStepSize * rayDir;
 
-            vec3 currPosition = getClosestPointOnSphere(sphereOrigin, beamRadius, sampleWorldPos); // turning it into sphere light
-
-            vec3 L = currPosition - sampleWorldPos;
-            float dist2 = dot(L, L);
-            if (dist2 < 0.0001) continue; // guard against division by zero
-            float dist = sqrt(dist2);
-            float attenuation = pointIntensity / (4.0 * M_PI * dist2);
-            totalLight += attenuation * vec3(1.0); // assuming white lights
+            totalLight += getSphereLightContribution(sampleWorldPos, sphereOrigin, pointIntensity);
         }
     }
     return totalLight;

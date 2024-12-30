@@ -8,16 +8,7 @@ layout(local_size_x = 16, local_size_y = 16) in;
 vec3 computeLightContribution(vec3 sampleWorldPos) {
     vec3 totalLight = vec3(0.0);
     for (int i = 0; i < lightCount; i++) {
-
-        vec3 currPosition = lights[i].positionTo;
-        float pointIntensity = lights[i].intensity;
-
-        vec3 L = currPosition - sampleWorldPos;
-        float dist2 = dot(L, L);
-        if (dist2 < 0.0001) continue; // guard against division by zero
-        float dist = sqrt(dist2);
-        float attenuation = pointIntensity / (4.0 * M_PI * dist2);
-        totalLight += attenuation * vec3(1.0); // assuming white lights
+        totalLight += getPointLightContribution(sampleWorldPos, lights[i].positionTo, lights[i].intensity);
     }
     return totalLight;
 }
