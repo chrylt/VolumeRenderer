@@ -1,3 +1,29 @@
+// Random number generator (simple hash-based PCG Family)
+uint hash(uvec3 v) {
+    uint x = v.x * 73856093u;
+    uint y = v.y * 19349663u;
+    uint z = v.z * 83492791u;
+    uint hash = x ^ y ^ z;
+    hash = (hash ^ (hash >> 16u)) * 0x45d9f3b;
+    hash = (hash ^ (hash >> 16u)) * 0x45d9f3b;
+    hash = hash ^ (hash >> 16u);
+    return hash;
+}
+float randf(uvec3 seed) {
+    return float(hash(seed)) * (1.0 / 4294967295.0);
+}
+
+float randf_inc(inout uvec3 seed) {
+    seed += uvec3(1, 1, 1);
+    return randf(seed);
+}
+
+vec3 randomDir(float r1, float r2) {
+    float theta = acos(1.0 - 2.0 * r1);
+    float phi = 2.0 * M_PI * r2;
+    return normalize(vec3(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta)));
+}
+
 bool intersectAABB(vec3 origin, vec3 dir, vec3 boxMin, vec3 boxMax, inout float tmin, inout float tmax) {
     for (int i = 0; i < 3; i++) {
         float invD = 1.0 / dir[i];
