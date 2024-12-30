@@ -44,16 +44,16 @@ constexpr uint32_t HEIGHT = 1024;
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 // Paths to compiled shader modules
-const std::string BEAM_LIGHT_GEN_PATH = "shaders/compiled_shaders/beam_light_gen.comp.spv";
+const std::string BEAM_LIGHT_GEN_PATH = "shaders/compiled_shaders/light_gen.comp.spv";
 const std::string BEAM_COMPUTE_SHADER_PATH = "shaders/compiled_shaders/beam_compute_color.comp.spv";
 
-const std::string RAY_LIGHT_GEN_PATH = "shaders/compiled_shaders/ray_light_gen.comp.spv";
+const std::string RAY_LIGHT_GEN_PATH = "shaders/compiled_shaders/light_gen.comp.spv";
 const std::string RAY_COMPUTE_SHADER_PATH = "shaders/compiled_shaders/ray_compute_color.comp.spv";
 
-const std::string POINT_LIGHT_GEN_PATH = "shaders/compiled_shaders/point_light_gen.comp.spv";
+const std::string POINT_LIGHT_GEN_PATH = "shaders/compiled_shaders/light_gen.comp.spv";
 const std::string POINT_COMPUTE_SHADER_PATH = "shaders/compiled_shaders/point_compute_color.comp.spv";
 
-const std::string SPHERE_LIGHT_GEN_PATH = "shaders/compiled_shaders/sphere_light_gen.comp.spv";
+const std::string SPHERE_LIGHT_GEN_PATH = "shaders/compiled_shaders/light_gen.comp.spv";
 const std::string SPHERE_COMPUTE_SHADER_PATH = "shaders/compiled_shaders/sphere_compute_color.comp.spv";
 
 const std::string PATH_LIGHT_GEN_PATH = "shaders/compiled_shaders/path_light_gen.comp.spv";
@@ -116,7 +116,7 @@ private:
     GLFWwindow* window;
 
     // State
-    Algorithms currentAlgorithm = SPHERE;
+    Algorithms currentAlgorithm = PATH;
 
     // Vulkan components
     std::unique_ptr<basalt::Instance> instance;
@@ -547,14 +547,14 @@ void VolumeApp::createUniformBuffer()
     uboData.cameraPos = glm::vec3(0.0, 20.0, -75.0);
     uboData.fov = 45.0f;
     uboData.photonInitialIntensity = 10.0f;
-    uboData.scatteringProbability = 0.5f;
+    uboData.scatteringProbability = 0.05f;
     uboData.absorptionCoefficient = 0.1f;
     uboData.maxLights = 1000;
     uboData.rayMaxDistance = 12000.0f;
     uboData.rayMarchingStepSize = 1.0f;
     uboData.lightSourceWorldPos = glm::vec3(-20.0, 15.0, -15.0);
     uboData.beamRadius = 2.0f;
-    uboData.lightRayStepSize = 1.0f;
+    uboData.lightRayStepSize = 0.3f;
     uboData.radiusFalloff = 2.0f;
 
     uniformBuffer->updateBuffer(*commandPool, &uboData, sizeof(UBO));
@@ -728,6 +728,19 @@ void VolumeApp::drawFrame() {
         sizeof(LightCountBuffer),
         0
     );
+
+    // Clear image for first frame
+    if(uboData.frameCount == 0)
+    {
+        vkCmdClearColorImage(
+            *cmdBuffer.get(),
+            storageImage->getImage(),
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            {},
+            1,
+            0
+        );
+    }
 
     // 1) Light generation compute
     vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, getCurrentLightGenVkPipeline());

@@ -27,24 +27,32 @@ vec3 computeLightContribution(vec3 sampleWorldPos) {
 void main() {
     initNanoVolume();
 
-    // Each thread can emit one photon or multiple photons.
-    // For simplicity, one photon per thread.
     uvec3 gid = gl_GlobalInvocationID;
     uvec3 seed = uvec3(gid.x, gid.y, gid.z) * frameCount;
 
     ivec2 pixelCoords = ivec2(gl_GlobalInvocationID.xy);
     ivec2 imageSize = imageSize(img);
 
-    // Example: Start photons from a single directional "light" region or point.
-    // Here we start photons from a single point:
-    vec3 photonOriginWorld = lightSourceWorldPos;
-    
-    // Random direction in hemisphere:
-    vec3 photonDirWorld = randomDir(randf_inc(seed), randf_inc(seed));
+    float u = float(pixelCoords.x) / float(imageSize.x);
+    float v = float(pixelCoords.y) / float(imageSize.y);
 
-    // Convert to index space
-    pnanovdb_vec3_t oIndex = pnanovdb_grid_world_to_indexf(discarded, gridHandle, pnanovdb_vec3_t(photonOriginWorld.x, photonOriginWorld.y, photonOriginWorld.z));
-    pnanovdb_vec3_t dIndex = pnanovdb_grid_world_to_index_dirf(discarded, gridHandle, pnanovdb_vec3_t(photonDirWorld.x, photonDirWorld.y, photonDirWorld.z));
+    uint width = framebufferDim.x;
+    uint height = framebufferDim.y;
+    float aspectRatio = float(width) / float(height);
+    float scale = tan(fov * 0.5 * M_PI / 180.0);
+
+    float x = (2 * (pixelCoords.x + 0.5) / width - 1) * aspectRatio * scale;
+    float y = (1 - 2 * (pixelCoords.y + 0.5) / height) * scale;
+
+    Ray ray;
+    ray.origin = cameraPos;
+    ray.direction = normalize(vec3(x, y, 1.0));
+    ray.minDistance = 0.0;
+    ray.maxDistance = rayMaxDistance;
+
+    // Transform ray into local index space
+    pnanovdb_vec3_t oIndex = pnanovdb_grid_world_to_indexf(discarded, gridHandle, pnanovdb_vec3_t(ray.origin.x, ray.origin.y, ray.origin.z));
+    pnanovdb_vec3_t dIndex = pnanovdb_grid_world_to_index_dirf(discarded, gridHandle, pnanovdb_vec3_t(ray.direction.x, ray.direction.y, ray.direction.z));
     
     vec3 rayOriginLocal = vec3(oIndex.x, oIndex.y, oIndex.z);
     vec3 rayDirLocal = normalize(vec3(dIndex.x, dIndex.y, dIndex.z));
@@ -54,11 +62,12 @@ void main() {
 
     pnanovdb_coord_t bboxMinI = pnanovdb_root_get_bbox_min(discarded, root);
     pnanovdb_coord_t bboxMaxI = pnanovdb_root_get_bbox_max(discarded, root);
+
     vec3 boxMin = vec3(bboxMinI.x, bboxMinI.y, bboxMinI.z);
     vec3 boxMax = vec3(bboxMaxI.x + 1, bboxMaxI.y + 1, bboxMaxI.z + 1);
 
-    float tmin = 0.0;
-    float tmax = rayMaxDistance; // max distance
+    float tmin = ray.minDistance;
+    float tmax = ray.maxDistance;
     bool hitVolume = intersectAABB(rayOriginLocal, rayDirLocal, boxMin, boxMax, tmin, tmax);
 
     float stepSize = rayMarchingStepSize;
@@ -76,7 +85,6 @@ void main() {
         ivec3 ijk = ivec3(floor(currentPosLocal.x), floor(currentPosLocal.y), floor(currentPosLocal.z));
         if (ijk.x >= bboxMinI.x && ijk.y >= bboxMinI.y && ijk.z >= bboxMinI.z &&
             ijk.x <= bboxMaxI.x && ijk.y <= bboxMaxI.y && ijk.z <= bboxMaxI.z) {
-
             pnanovdb_address_t addr = pnanovdb_readaccessor_get_value_address(gridType, discarded, accessor, ijk);
             float val = pnanovdb_read_float(discarded, addr);
 
@@ -99,17 +107,17 @@ void main() {
                     currDirGlobal = pnanovdb_grid_index_to_world_dirf(discarded, gridHandle, pnanovdb_vec3_t(rayDirLocal.x, rayDirLocal.y, rayDirLocal.z));
                     currPosGlobal =  pnanovdb_grid_index_to_worldf(discarded, gridHandle, pnanovdb_vec3_t(currentPosLocal.x, currentPosLocal.y, currentPosLocal.z));
                 }
-
-                // Check for intersection with light source
-                float t_hit;
-                if(intersectSphere(currPosGlobal, currDirGlobal, lightSourceWorldPos, 1, t_hit)){
-                    vec3 lightIncoming = vec3(1);
-
-                    vec3 dC = T * val * stepSize * lightIncoming;
-                    finalColor += dC;
-                }
             }
-        }
+
+            // Check for intersection with light source
+            float t_hit;
+            if(intersectSphere(currPosGlobal, currDirGlobal, lightSourceWorldPos, 20.0, t_hit)){
+                vec3 lightIncoming = vec3(1);
+
+                vec3 dC = T * val * stepSize * lightIncoming;
+                finalColor += dC;
+            }
+        } // TODO: reset currentT somewhere!!!
 
         currentT += stepSize;
         currentPosLocal = rayOriginLocal + rayDirLocal * currentT;
