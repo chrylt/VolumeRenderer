@@ -547,16 +547,16 @@ void VolumeApp::createUniformBuffer()
     uboData.framebufferDim = glm::uvec2(swapChain->getExtent().width, swapChain->getExtent().height);
     uboData.cameraPos = glm::vec3(0.0, 20.0, -75.0);
     uboData.fov = 45.0f;
-    uboData.photonInitialIntensity = 10.0f;
+    uboData.photonInitialIntensity = 100.0f;
     uboData.scatteringProbability = 0.05f;
-    uboData.absorptionCoefficient = 0.1f;
+    uboData.absorptionCoefficient = 0.05f;
     uboData.maxLights = 1000;
     uboData.rayMaxDistance = 12000.0f;
     uboData.rayMarchingStepSize = 1.0f;
     uboData.lightSourceWorldPos = glm::vec3(-20.0, 15.0, -15.0);
     uboData.beamRadius = 0.1f;
     uboData.lightRayStepSize = 0.3f;
-    uboData.radiusFalloff = 2.0f;
+    uboData.radiusFalloff = 0.5f;
 
     uniformBuffer->updateBuffer(*commandPool, &uboData, sizeof(UBO));
 }
@@ -665,7 +665,7 @@ void VolumeApp::drawFrame() {
     //ImGui::SliderFloat("FOV", &uboData.fov, 1.0f, 179.0f);
 
     // Photon initial intensity
-    ImGui::SliderFloat("Photon Intensity", &uboData.photonInitialIntensity, 0.0f, 100.0f);
+    ImGui::SliderFloat("Photon Intensity", &uboData.photonInitialIntensity, 0.0f, 500.0f);
 
     // Scattering probability
     ImGui::SliderFloat("Scattering Probability", &uboData.scatteringProbability, 0.0f, 1.0f);
@@ -692,7 +692,7 @@ void VolumeApp::drawFrame() {
     // Radius Falloff
     ImGui::SliderFloat("Beam Start Radius", &uboData.beamRadius, 0.0f, 10.0f);
     ImGui::SliderFloat("Light Step Size", &uboData.lightRayStepSize, 0.0f, 10.0f);
-    ImGui::SliderFloat("Radius Falloff", &uboData.radiusFalloff, 0.0f, 10.0f);
+    ImGui::SliderFloat("Radius Falloff", &uboData.radiusFalloff, -1.0f, 5.0f);
 
     // Button to reset the frameCount
     if (ImGui::Button("Refresh")) {
