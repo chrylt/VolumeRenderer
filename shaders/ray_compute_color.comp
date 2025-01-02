@@ -4,6 +4,7 @@
 #include "common_includes.h"
 
 layout(local_size_x = 16, local_size_y = 16) in;
+#define INVOCATIONS_PER_FRAME (16 * 16)
 
 vec3 computeLightContribution(vec3 sampleWorldPos) {
     vec3 totalLight = vec3(0.0);
@@ -108,7 +109,9 @@ void main() {
 
     vec3 previousColor = imageLoad(img, pixelCoords).rgb;
 
-    vec4 newColor = vec4((previousColor * (frameCount - 1) + frameColor) / frameCount, 1);
+    float totalInvocations = frameCount * INVOCATIONS_PER_FRAME;
+
+    vec4 newColor = vec4((previousColor * (totalInvocations - 1) + frameColor) / totalInvocations, 1);
 
     imageStore(img, pixelCoords, newColor);
 }
