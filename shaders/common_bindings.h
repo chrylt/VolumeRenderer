@@ -13,7 +13,7 @@ layout(std430, binding = 3) buffer PointLightBuffer {
 
 layout(std430, binding = 4) buffer LightCounterBuffer {
     uint lightCount;
-    uint debug;
+    uint contributionCounter;
 };
 
 layout(std140, binding = 5) uniform UBO {

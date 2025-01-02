@@ -4,7 +4,7 @@
 #include "common_includes.h"
 
 layout(local_size_x = 16, local_size_y = 16) in;
-#define INVOCATIONS_PER_FRAME (16 * 16)
+#define INVOCATIONS_PER_FRAME 1
 
 vec3 computeLightContribution(vec3 sampleWorldPos) {
     vec3 totalLight = vec3(0.0);
@@ -102,18 +102,14 @@ void main() {
                     rayOriginLocal = currentPosLocal;
                     currentT = 0;
                 }
-            }
 
-            // Check for intersection with light source
-            vec3 currDirGlobal = pnanovdb_grid_index_to_world_dirf(discarded, gridHandle, pnanovdb_vec3_t(rayDirLocal.x, rayDirLocal.y, rayDirLocal.z));
-            vec3 currPosGlobal =  pnanovdb_grid_index_to_worldf(discarded, gridHandle, pnanovdb_vec3_t(currentPosLocal.x, currentPosLocal.y, currentPosLocal.z));
-            float t_hit;
-            if(intersectSphere(currPosGlobal, currDirGlobal, lightSourceWorldPos, 10.0, t_hit)){
-                vec3 lightIncoming = vec3(1) * photonIntensity;
-
+                // Add in-scattering
+                vec3 currPosGlobal =  pnanovdb_grid_index_to_worldf(discarded, gridHandle, pnanovdb_vec3_t(currentPosLocal.x, currentPosLocal.y, currentPosLocal.z));
+                vec3 lightIncoming = getPointLightContribution(currPosGlobal, lightSourceWorldPos, photonInitialIntensity * 10);
                 vec3 dC = T * val * stepSize * lightIncoming;
                 finalColor += dC;
             }
+
         }
 
         currentT += stepSize;
@@ -124,9 +120,9 @@ void main() {
 
     vec3 previousColor = imageLoad(img, pixelCoords).rgb;
 
-    float totalInvocations = frameCount * INVOCATIONS_PER_FRAME;
+    uint contributionCount = frameCount;
 
-    vec4 newColor = vec4((previousColor * (totalInvocations - 1) + frameColor) / totalInvocations, 1);
+    vec4 newColor = vec4((previousColor * (contributionCount - 1) + frameColor) / contributionCount, 1);
 
     imageStore(img, pixelCoords, newColor);
 }

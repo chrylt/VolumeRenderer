@@ -116,7 +116,7 @@ private:
     GLFWwindow* window;
 
     // State
-    Algorithms currentAlgorithm = PATH;
+    Algorithms currentAlgorithm = RAY;
 
     // Vulkan components
     std::unique_ptr<basalt::Instance> instance;
@@ -145,6 +145,7 @@ private:
 
     // Storage image
     std::unique_ptr<basalt::Image> storageImage;
+    VkFormat imageFormat;
     VkImageView storageImageView = VK_NULL_HANDLE;
     VkSampler sampler = VK_NULL_HANDLE;
 
@@ -335,7 +336,7 @@ void VolumeApp::initImGui()
 }
 
 void VolumeApp::createStorageImage() {
-    VkFormat imageFormat = basalt::utils::findSupportedFormat(*device,
+    imageFormat = basalt::utils::findSupportedFormat(*device,
         { VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM },
         VK_IMAGE_TILING_OPTIMAL,
         VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
@@ -346,7 +347,7 @@ void VolumeApp::createStorageImage() {
         swapChain->getExtent().height,
         imageFormat,
         VK_IMAGE_TILING_OPTIMAL,
-        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
     // Create image view
@@ -553,7 +554,7 @@ void VolumeApp::createUniformBuffer()
     uboData.rayMaxDistance = 12000.0f;
     uboData.rayMarchingStepSize = 1.0f;
     uboData.lightSourceWorldPos = glm::vec3(-20.0, 15.0, -15.0);
-    uboData.beamRadius = 2.0f;
+    uboData.beamRadius = 0.1f;
     uboData.lightRayStepSize = 0.3f;
     uboData.radiusFalloff = 2.0f;
 
@@ -730,16 +731,83 @@ void VolumeApp::drawFrame() {
     );
 
     // Clear image for first frame
-    if(uboData.frameCount == 0)
+    if(uboData.frameCount == 1)
     {
-        vkCmdClearColorImage(
-            *cmdBuffer.get(),
+        VkClearColorValue clearColorValue = {};
+        clearColorValue.float32[0] = 0.0f; // R
+        clearColorValue.float32[1] = 0.0f; // G
+        clearColorValue.float32[2] = 0.0f; // B
+        clearColorValue.float32[3] = 1.0f; // A
+
+        VkImageSubresourceRange subresourceRange = {};
+        subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        subresourceRange.baseMipLevel = 0;
+        subresourceRange.levelCount = 1;
+        subresourceRange.baseArrayLayer = 0;
+        subresourceRange.layerCount = 1;
+
+        // Transition from GENERAL -> TRANSFER_DST_OPTIMAL
+        {
+            VkImageMemoryBarrier barrier{};
+            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.image = storageImage->getImage(); // your valid VkImage
+            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            barrier.subresourceRange.baseMipLevel = 0;
+            barrier.subresourceRange.levelCount = 1;
+            barrier.subresourceRange.baseArrayLayer = 0;
+            barrier.subresourceRange.layerCount = 1;
+
+            vkCmdPipelineBarrier(
+                *cmdBuffer.get(),
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                0,
+                0, nullptr,
+                0, nullptr,
+                1, &barrier
+            );
+        }
+
+        // Clear
+        vkCmdClearColorImage(*cmdBuffer.get(),
             storageImage->getImage(),
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            {},
-            1,
-            0
-        );
+            &clearColorValue,
+            1, &subresourceRange);
+
+        // Transition from TRANSFER_DST_OPTIMAL -> GENERAL
+        {
+            VkImageMemoryBarrier barrier{};
+            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.image = storageImage->getImage();
+            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            barrier.subresourceRange.baseMipLevel = 0;
+            barrier.subresourceRange.levelCount = 1;
+            barrier.subresourceRange.baseArrayLayer = 0;
+            barrier.subresourceRange.layerCount = 1;
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+
+
+            vkCmdPipelineBarrier(
+                *cmdBuffer.get(),
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                0,
+                0, nullptr,
+                0, nullptr,
+                1, &barrier
+            );
+        }
+
     }
 
     // 1) Light generation compute
