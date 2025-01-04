@@ -551,7 +551,7 @@ void VolumeApp::createUniformBuffer()
     uboData.scatteringProbability = 0.05f;
     uboData.absorptionCoefficient = 0.05f;
     uboData.maxLights = 1000;
-    uboData.rayMaxDistance = 12000.0f;
+    uboData.rayMaxDistance = 2500.0f;
     uboData.rayMarchingStepSize = 1.0f;
     uboData.lightSourceWorldPos = glm::vec3(-20.0, 15.0, -15.0);
     uboData.beamRadius = 0.1f;
