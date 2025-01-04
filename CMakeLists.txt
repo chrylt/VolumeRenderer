@@ -20,7 +20,6 @@ add_subdirectory(external/imgui)
 
 # Find other packages (excluding GLM)
 find_package(glfw3 REQUIRED)
-# find_package(stb REQUIRED) # Uncomment if needed
 find_package(assimp REQUIRED)
 find_package(Vulkan REQUIRED)
 find_package(CUDAToolkit REQUIRED)
@@ -70,7 +69,23 @@ if(MSVC)
     target_compile_options(VolumeRenderer PRIVATE /Zm200 /bigobj)
 endif()
 
-# Add post-build commands to copy runtime DLLs
+# Define macros based on configuration
+target_compile_definitions(VolumeRenderer PRIVATE
+    $<$<CONFIG:Release>:NDEBUG>
+)
+
+# Set optimization flags for Release configuration
+target_compile_options(VolumeRenderer PRIVATE
+    $<$<CONFIG:Release>:/O2>
+)
+
+# Organize output directories
+set_target_properties(VolumeRenderer PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/bin/Debug"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/bin/Release"
+)
+
+# Add post-build commands to copy runtime DLLs and set working directory based on configuration
 if(MSVC)
     add_custom_command(TARGET VolumeRenderer POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -78,7 +93,9 @@ if(MSVC)
             $<TARGET_FILE_DIR:VolumeRenderer>
         COMMAND_EXPAND_LISTS
     )
-    # Ensure that the runtime dependencies are copied correctly
-    set_property(TARGET VolumeRenderer PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/out/build/x64-debug")
+    
+    # Set the debugger working directory based on the build configuration
+    set_property(TARGET VolumeRenderer PROPERTY 
+        VS_DEBUGGER_WORKING_DIRECTORY "$<IF:$<CONFIG:Debug>,${CMAKE_SOURCE_DIR}/out/build/x64-debug,${CMAKE_SOURCE_DIR}/out/build/x64-release>"
+    )
 endif()
-

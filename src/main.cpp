@@ -44,10 +44,29 @@ constexpr uint32_t HEIGHT = 1024;
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 // Paths to compiled shader modules
-const std::string LIGHT_GEN_PATH = "shaders/compiled_shaders/light_gen.comp.spv";
-const std::string COMPUTE_SHADER_PATH = "shaders/compiled_shaders/compute_color.comp.spv";
+const std::string BEAM_LIGHT_GEN_PATH = "shaders/compiled_shaders/light_gen.comp.spv";
+const std::string BEAM_COMPUTE_SHADER_PATH = "shaders/compiled_shaders/beam_compute_color.comp.spv";
+
+const std::string RAY_LIGHT_GEN_PATH = "shaders/compiled_shaders/light_gen.comp.spv";
+const std::string RAY_COMPUTE_SHADER_PATH = "shaders/compiled_shaders/ray_compute_color.comp.spv";
+
+const std::string POINT_LIGHT_GEN_PATH = "shaders/compiled_shaders/light_gen.comp.spv";
+const std::string POINT_COMPUTE_SHADER_PATH = "shaders/compiled_shaders/point_compute_color.comp.spv";
+
+const std::string SPHERE_LIGHT_GEN_PATH = "shaders/compiled_shaders/light_gen.comp.spv";
+const std::string SPHERE_COMPUTE_SHADER_PATH = "shaders/compiled_shaders/sphere_compute_color.comp.spv";
+
+const std::string PATH_LIGHT_GEN_PATH = "shaders/compiled_shaders/path_light_gen.comp.spv";
+const std::string PATH_COMPUTE_SHADER_PATH = "shaders/compiled_shaders/path_compute_color.comp.spv";
+
 const std::string VERT_SHADER_PATH = "shaders/compiled_shaders/fullscreen.vert.spv";
 const std::string FRAG_SHADER_PATH = "shaders/compiled_shaders/sample_image.frag.spv";
+
+enum Algorithms
+{
+	BEAM, RAY, POINT, SPHERE, PATH
+};
+
 
 struct RayLight {
     glm::vec3 positionFrom;
@@ -96,6 +115,9 @@ private:
     // Window
     GLFWwindow* window;
 
+    // State
+    Algorithms currentAlgorithm = RAY;
+
     // Vulkan components
     std::unique_ptr<basalt::Instance> instance;
     std::unique_ptr<basalt::Surface> surface;
@@ -103,8 +125,16 @@ private:
     std::unique_ptr<basalt::SwapChain> swapChain;
     std::unique_ptr<basalt::RenderPass> renderPass;
     std::unique_ptr<basalt::GraphicsPipeline> graphicsPipeline;
-    std::unique_ptr<basalt::ComputePipeline> computePipeline;
-    std::unique_ptr<basalt::ComputePipeline> lightGenPipeline;
+    std::unique_ptr<basalt::ComputePipeline> beamLightGenPipeline;
+    std::unique_ptr<basalt::ComputePipeline> beamComputeColorPipeline;
+    std::unique_ptr<basalt::ComputePipeline> rayLightGenPipeline;
+    std::unique_ptr<basalt::ComputePipeline> rayComputeColorPipeline;
+    std::unique_ptr<basalt::ComputePipeline> pointLightGenPipeline;
+    std::unique_ptr<basalt::ComputePipeline> pointComputeColorPipeline;
+    std::unique_ptr<basalt::ComputePipeline> sphereLightGenPipeline;
+    std::unique_ptr<basalt::ComputePipeline> sphereComputeColorPipeline;
+    std::unique_ptr<basalt::ComputePipeline> pathLightGenPipeline;
+    std::unique_ptr<basalt::ComputePipeline> pathComputeColorPipeline;
     std::unique_ptr<basalt::CommandPool> commandPool;
     std::unique_ptr<basalt::SyncObjects> syncObjects;
 
@@ -115,6 +145,7 @@ private:
 
     // Storage image
     std::unique_ptr<basalt::Image> storageImage;
+    VkFormat imageFormat;
     VkImageView storageImageView = VK_NULL_HANDLE;
     VkSampler sampler = VK_NULL_HANDLE;
 
@@ -156,6 +187,41 @@ private:
     void createSampler();
     void createNanoVDBBuffer();
     void createUniformBuffer();
+
+    // State
+    VkPipeline getCurrentLightGenVkPipeline() const
+    {
+	    switch(currentAlgorithm)
+	    {
+	    case BEAM:
+            return beamLightGenPipeline->getPipeline();
+	    case RAY:
+            return rayLightGenPipeline->getPipeline();
+	    case POINT:
+            return pointLightGenPipeline->getPipeline();
+	    case SPHERE:
+            return sphereLightGenPipeline->getPipeline();
+	    default:
+            return pathLightGenPipeline->getPipeline();
+	    }
+    }
+
+    VkPipeline getCurrentComputeColorVkPipeline() const
+    {
+        switch (currentAlgorithm)
+        {
+        case BEAM:
+            return beamComputeColorPipeline->getPipeline();
+        case RAY:
+            return rayComputeColorPipeline->getPipeline();
+        case POINT:
+            return pointComputeColorPipeline->getPipeline();
+        case SPHERE:
+            return sphereComputeColorPipeline->getPipeline();
+        default:
+            return pathComputeColorPipeline->getPipeline();
+        }
+    }
 
     // Rendering loop
     void mainLoop();
@@ -270,7 +336,7 @@ void VolumeApp::initImGui()
 }
 
 void VolumeApp::createStorageImage() {
-    VkFormat imageFormat = basalt::utils::findSupportedFormat(*device,
+    imageFormat = basalt::utils::findSupportedFormat(*device,
         { VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM },
         VK_IMAGE_TILING_OPTIMAL,
         VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
@@ -281,7 +347,7 @@ void VolumeApp::createStorageImage() {
         swapChain->getExtent().height,
         imageFormat,
         VK_IMAGE_TILING_OPTIMAL,
-        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
     // Create image view
@@ -422,7 +488,11 @@ void VolumeApp::createLightGenPipeline() {
         throw std::runtime_error("Failed to create lightGen pipeline layout!");
     }
 
-    lightGenPipeline = std::make_unique<basalt::ComputePipeline>(*device, LIGHT_GEN_PATH, lightGenPipelineLayout);
+    beamLightGenPipeline = std::make_unique<basalt::ComputePipeline>(*device, BEAM_LIGHT_GEN_PATH, lightGenPipelineLayout);
+    rayLightGenPipeline = std::make_unique<basalt::ComputePipeline>(*device, RAY_LIGHT_GEN_PATH, lightGenPipelineLayout);
+    pointLightGenPipeline = std::make_unique<basalt::ComputePipeline>(*device, POINT_LIGHT_GEN_PATH, lightGenPipelineLayout);
+    sphereLightGenPipeline = std::make_unique<basalt::ComputePipeline>(*device, SPHERE_LIGHT_GEN_PATH, lightGenPipelineLayout);
+    pathLightGenPipeline = std::make_unique<basalt::ComputePipeline>(*device, PATH_LIGHT_GEN_PATH, lightGenPipelineLayout);
 }
 
 void VolumeApp::createComputePipeline() {
@@ -437,7 +507,11 @@ void VolumeApp::createComputePipeline() {
         throw std::runtime_error("Failed to create compute pipeline layout!");
     }
 
-    computePipeline = std::make_unique<basalt::ComputePipeline>(*device, COMPUTE_SHADER_PATH, computePipelineLayout);
+    beamComputeColorPipeline = std::make_unique<basalt::ComputePipeline>(*device, BEAM_COMPUTE_SHADER_PATH, computePipelineLayout);
+    rayComputeColorPipeline = std::make_unique<basalt::ComputePipeline>(*device, RAY_COMPUTE_SHADER_PATH, computePipelineLayout);
+    pointComputeColorPipeline = std::make_unique<basalt::ComputePipeline>(*device, POINT_COMPUTE_SHADER_PATH, computePipelineLayout);
+    sphereComputeColorPipeline = std::make_unique<basalt::ComputePipeline>(*device, SPHERE_COMPUTE_SHADER_PATH, computePipelineLayout);
+    pathComputeColorPipeline = std::make_unique<basalt::ComputePipeline>(*device, PATH_COMPUTE_SHADER_PATH, computePipelineLayout);
 }
 
 void VolumeApp::createSampler() {
@@ -473,16 +547,16 @@ void VolumeApp::createUniformBuffer()
     uboData.framebufferDim = glm::uvec2(swapChain->getExtent().width, swapChain->getExtent().height);
     uboData.cameraPos = glm::vec3(0.0, 20.0, -75.0);
     uboData.fov = 45.0f;
-    uboData.photonInitialIntensity = 10.0f;
-    uboData.scatteringProbability = 0.5f;
-    uboData.absorptionCoefficient = 0.1f;
+    uboData.photonInitialIntensity = 100.0f;
+    uboData.scatteringProbability = 0.05f;
+    uboData.absorptionCoefficient = 0.05f;
     uboData.maxLights = 1000;
-    uboData.rayMaxDistance = 12000.0f;
+    uboData.rayMaxDistance = 2500.0f;
     uboData.rayMarchingStepSize = 1.0f;
     uboData.lightSourceWorldPos = glm::vec3(-20.0, 15.0, -15.0);
-    uboData.beamRadius = 2.0f;
-    uboData.lightRayStepSize = 1.0f;
-    uboData.radiusFalloff = 2.0f;
+    uboData.beamRadius = 0.1f;
+    uboData.lightRayStepSize = 0.3f;
+    uboData.radiusFalloff = 0.5f;
 
     uniformBuffer->updateBuffer(*commandPool, &uboData, sizeof(UBO));
 }
@@ -574,14 +648,21 @@ void VolumeApp::drawFrame() {
     // ---------------------------------
     ImGui::Begin("Settings");
 
+    { // Switch algorithms
+        static const char* algorithmNames[] = { "Beam", "Ray", "Point", "Sphere", "Path" };
+        int currentItem = static_cast<int>(currentAlgorithm);
+        if (ImGui::Combo("Algorithm", &currentItem, algorithmNames, IM_ARRAYSIZE(algorithmNames))) {
+            currentAlgorithm = static_cast<Algorithms>(currentItem);
+            // Reset the frame counter when changing algorithms
+            uboData.frameCount = 0;
+        }
+    }
+
     // Camera position
     ImGui::SliderFloat3("Camera Pos", &uboData.cameraPos.x, -200.0f, 200.0f);
 
-    // Field of View
-    ImGui::SliderFloat("FOV", &uboData.fov, 1.0f, 179.0f);
-
     // Photon initial intensity
-    ImGui::SliderFloat("Photon Intensity", &uboData.photonInitialIntensity, 0.0f, 100.0f);
+    ImGui::SliderFloat("Photon Intensity", &uboData.photonInitialIntensity, 0.0f, 500.0f);
 
     // Scattering probability
     ImGui::SliderFloat("Scattering Probability", &uboData.scatteringProbability, 0.0f, 1.0f);
@@ -606,9 +687,9 @@ void VolumeApp::drawFrame() {
     ImGui::SliderFloat3("Light Source Pos", &uboData.lightSourceWorldPos.x, -100.0f, 100.0f);
 
     // Radius Falloff
-    ImGui::SliderFloat("Beam Start Radius", &uboData.beamRadius, 0.0f, 10.0f);
+    ImGui::SliderFloat("Beam Radius", &uboData.beamRadius, 0.0f, 10.0f);
     ImGui::SliderFloat("Light Step Size", &uboData.lightRayStepSize, 0.0f, 10.0f);
-    ImGui::SliderFloat("Radius Falloff", &uboData.radiusFalloff, 0.0f, 10.0f);
+    //ImGui::SliderFloat("Radius Falloff", &uboData.radiusFalloff, -1.0f, 5.0f);
 
     // Button to reset the frameCount
     if (ImGui::Button("Refresh")) {
@@ -629,7 +710,7 @@ void VolumeApp::drawFrame() {
     // Increase frame counter each frame (unless user pressed Refresh).
     // If 'Refresh' was pressed, uboData.frameCount is already set to 0 above.
     uboData.frameCount++;
-    uboData.beamRadius = calculateRadius(uboData.beamRadius, uboData.radiusFalloff);
+    //uboData.beamRadius = calculateRadius(uboData.beamRadius, uboData.radiusFalloff);
 
     uniformBuffer->updateBuffer(*commandPool, &uboData, sizeof(UBO));
 
@@ -646,8 +727,88 @@ void VolumeApp::drawFrame() {
         0
     );
 
+    // Clear image for first frame
+    if(uboData.frameCount == 1)
+    {
+        VkClearColorValue clearColorValue = {};
+        clearColorValue.float32[0] = 0.0f; // R
+        clearColorValue.float32[1] = 0.0f; // G
+        clearColorValue.float32[2] = 0.0f; // B
+        clearColorValue.float32[3] = 1.0f; // A
+
+        VkImageSubresourceRange subresourceRange = {};
+        subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        subresourceRange.baseMipLevel = 0;
+        subresourceRange.levelCount = 1;
+        subresourceRange.baseArrayLayer = 0;
+        subresourceRange.layerCount = 1;
+
+        // Transition from GENERAL -> TRANSFER_DST_OPTIMAL
+        {
+            VkImageMemoryBarrier barrier{};
+            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.image = storageImage->getImage(); // your valid VkImage
+            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            barrier.subresourceRange.baseMipLevel = 0;
+            barrier.subresourceRange.levelCount = 1;
+            barrier.subresourceRange.baseArrayLayer = 0;
+            barrier.subresourceRange.layerCount = 1;
+
+            vkCmdPipelineBarrier(
+                *cmdBuffer.get(),
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                0,
+                0, nullptr,
+                0, nullptr,
+                1, &barrier
+            );
+        }
+
+        // Clear
+        vkCmdClearColorImage(*cmdBuffer.get(),
+            storageImage->getImage(),
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            &clearColorValue,
+            1, &subresourceRange);
+
+        // Transition from TRANSFER_DST_OPTIMAL -> GENERAL
+        {
+            VkImageMemoryBarrier barrier{};
+            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.image = storageImage->getImage();
+            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            barrier.subresourceRange.baseMipLevel = 0;
+            barrier.subresourceRange.levelCount = 1;
+            barrier.subresourceRange.baseArrayLayer = 0;
+            barrier.subresourceRange.layerCount = 1;
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+
+
+            vkCmdPipelineBarrier(
+                *cmdBuffer.get(),
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                0,
+                0, nullptr,
+                0, nullptr,
+                1, &barrier
+            );
+        }
+
+    }
+
     // 1) Light generation compute
-    vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, lightGenPipeline->getPipeline());
+    vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, getCurrentLightGenVkPipeline());
     vkCmdBindDescriptorSets(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, lightGenPipelineLayout,
         0, 1, &descriptorSet, 0, nullptr);
     vkCmdDispatch(*cmdBuffer.get(), 1, 1, 1);
@@ -668,7 +829,7 @@ void VolumeApp::drawFrame() {
     );
 
     // 2) Main compute pipeline
-    vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline->getPipeline());
+    vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, getCurrentComputeColorVkPipeline());
     vkCmdBindDescriptorSets(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout,
         0, 1, &descriptorSet, 0, nullptr);
     uint32_t groupCountX = (swapChain->getExtent().width + 15) / 16;
@@ -918,9 +1079,17 @@ void VolumeApp::cleanupSwapChain() {
     }
     storageImage.reset();
 
-    lightGenPipeline.reset();
+    beamLightGenPipeline.reset();
+    beamComputeColorPipeline.reset();
+    rayLightGenPipeline.reset();
+    rayComputeColorPipeline.reset();
+    pointLightGenPipeline.reset();
+    pointComputeColorPipeline.reset();
+    sphereLightGenPipeline.reset();
+    sphereComputeColorPipeline.reset();
+    pathLightGenPipeline.reset();
+    pathComputeColorPipeline.reset();
     graphicsPipeline.reset();
-    computePipeline.reset();
 
     if (lightGenPipelineLayout) {
         vkDestroyPipelineLayout(device->getDevice(), lightGenPipelineLayout, nullptr);
