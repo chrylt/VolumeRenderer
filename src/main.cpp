@@ -661,9 +661,6 @@ void VolumeApp::drawFrame() {
     // Camera position
     ImGui::SliderFloat3("Camera Pos", &uboData.cameraPos.x, -200.0f, 200.0f);
 
-    // Field of View
-    //ImGui::SliderFloat("FOV", &uboData.fov, 1.0f, 179.0f);
-
     // Photon initial intensity
     ImGui::SliderFloat("Photon Intensity", &uboData.photonInitialIntensity, 0.0f, 500.0f);
 
@@ -690,9 +687,9 @@ void VolumeApp::drawFrame() {
     ImGui::SliderFloat3("Light Source Pos", &uboData.lightSourceWorldPos.x, -100.0f, 100.0f);
 
     // Radius Falloff
-    ImGui::SliderFloat("Beam Start Radius", &uboData.beamRadius, 0.0f, 10.0f);
+    ImGui::SliderFloat("Beam Radius", &uboData.beamRadius, 0.0f, 10.0f);
     ImGui::SliderFloat("Light Step Size", &uboData.lightRayStepSize, 0.0f, 10.0f);
-    ImGui::SliderFloat("Radius Falloff", &uboData.radiusFalloff, -1.0f, 5.0f);
+    //ImGui::SliderFloat("Radius Falloff", &uboData.radiusFalloff, -1.0f, 5.0f);
 
     // Button to reset the frameCount
     if (ImGui::Button("Refresh")) {
@@ -713,7 +710,7 @@ void VolumeApp::drawFrame() {
     // Increase frame counter each frame (unless user pressed Refresh).
     // If 'Refresh' was pressed, uboData.frameCount is already set to 0 above.
     uboData.frameCount++;
-    uboData.beamRadius = calculateRadius(uboData.beamRadius, uboData.radiusFalloff);
+    //uboData.beamRadius = calculateRadius(uboData.beamRadius, uboData.radiusFalloff);
 
     uniformBuffer->updateBuffer(*commandPool, &uboData, sizeof(UBO));
 
