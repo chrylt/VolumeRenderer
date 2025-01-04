@@ -1,13 +1,16 @@
-// --- ADDED/CHANGED ---
+// #define MEASURE_PERFORMANCE
+#define MEASURE_QUALITY
+
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
 #include <chrono>
 #include <fstream>
 #include <iomanip>
-#include <filesystem> // C++17 for creating directories if needed
+#include <filesystem>
 #include <mutex>
-// --- END OF ADDED/CHANGED ---
+#include <ctime>
+#include <sstream>
 
 #include <array>
 #include <iostream>
@@ -47,14 +50,10 @@
 #include "sync_objects.h"
 #include "utils.h"
 
-// Constants for window dimensions
 constexpr uint32_t WIDTH = 1024;
 constexpr uint32_t HEIGHT = 1024;
-
-// Maximum number of frames that can be processed concurrently
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
-// Paths to compiled shader modules
 const std::string BEAM_LIGHT_GEN_PATH = "shaders/compiled_shaders/light_gen.comp.spv";
 const std::string BEAM_COMPUTE_SHADER_PATH = "shaders/compiled_shaders/beam_compute_color.comp.spv";
 
@@ -123,16 +122,14 @@ public:
 private:
     // Window
     GLFWwindow* window;
-
-    // State
-    Algorithms currentAlgorithm = POINT;
+    bool framebufferResized = false;
 
     // Vulkan components
-    std::unique_ptr<basalt::Instance> instance;
-    std::unique_ptr<basalt::Surface> surface;
-    std::unique_ptr<basalt::Device> device;
-    std::unique_ptr<basalt::SwapChain> swapChain;
-    std::unique_ptr<basalt::RenderPass> renderPass;
+    std::unique_ptr<basalt::Instance>     instance;
+    std::unique_ptr<basalt::Surface>      surface;
+    std::unique_ptr<basalt::Device>       device;
+    std::unique_ptr<basalt::SwapChain>    swapChain;
+    std::unique_ptr<basalt::RenderPass>   renderPass;
     std::unique_ptr<basalt::GraphicsPipeline> graphicsPipeline;
     std::unique_ptr<basalt::ComputePipeline> beamLightGenPipeline;
     std::unique_ptr<basalt::ComputePipeline> beamComputeColorPipeline;
@@ -144,12 +141,10 @@ private:
     std::unique_ptr<basalt::ComputePipeline> sphereComputeColorPipeline;
     std::unique_ptr<basalt::ComputePipeline> pathLightGenPipeline;
     std::unique_ptr<basalt::ComputePipeline> pathComputeColorPipeline;
-    std::unique_ptr<basalt::CommandPool> commandPool;
-    std::unique_ptr<basalt::SyncObjects> syncObjects;
-
-    // Descriptor sets and layouts
+    std::unique_ptr<basalt::CommandPool>   commandPool;
+    std::unique_ptr<basalt::SyncObjects>   syncObjects;
     std::unique_ptr<basalt::DescriptorSetLayout> descriptorSetLayout;
-    std::unique_ptr<basalt::DescriptorPool> descriptorPool;
+    std::unique_ptr<basalt::DescriptorPool>      descriptorPool;
     VkDescriptorSet descriptorSet;
 
     // Storage image
@@ -163,7 +158,7 @@ private:
     std::unique_ptr<basalt::Buffer> rayLightsBuffer;
     std::unique_ptr<basalt::Buffer> lightCounterBuffer;
     std::unique_ptr<basalt::Buffer> uniformBuffer;
-    UBO uboData;
+    UBO uboData{};
 
     // Pipelines
     VkPipelineLayout graphicsPipelineLayout = VK_NULL_HANDLE;
@@ -172,36 +167,59 @@ private:
 
     // Command buffers
     std::vector<std::unique_ptr<basalt::CommandBuffer>> commandBuffers;
-
-    // Frame management
     size_t currentFrame = 0;
-    bool framebufferResized = false;
-
     // A separate descriptor pool for ImGui
     VkDescriptorPool imguiDescriptorPool = VK_NULL_HANDLE;
 
-    // --- ADDED/CHANGED ---
-    // Timing & logging
-    std::ofstream perfLog{ "performance.csv", std::ios::out | std::ios::app };
+    // Current algorithm
+    Algorithms currentAlgorithm = RAY;
+
+#if defined(MEASURE_PERFORMANCE)
+    // ------------------------------------------------
+    // PERFORMANCE MEASUREMENT
+    // ------------------------------------------------
+    // We'll store logs in something like "output/performance_<timestamp>.csv"
+    std::string perfLogPath;
+    std::ofstream perfLog;
     std::chrono::steady_clock::time_point frameStartTime;
     std::chrono::steady_clock::time_point frameEndTime;
+    std::mutex perfMutex;
 
-    // For FPS display in window title
+    // We'll save frames with exponential stepping:
+    // but we still want a unique name each time (like a timestamp).
+    int nextSaveFrame = 1;
+
+    // Helper to get a timestamp string for the CSV file name
+    static std::string getTimestampString()
+    {
+        auto now = std::time(nullptr);
+        std::tm tmNow{};
+#if defined(_WIN32)
+        localtime_s(&tmNow, &now); // Windows
+#else
+        localtime_r(&now, &tmNow); // POSIX
+#endif
+        char buf[64];
+        std::strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", &tmNow);
+        return std::string(buf);
+    }
+
+#elif defined(MEASURE_QUALITY)
+    // QUALITY MEASUREMENT
+    // We do not measure performance times at all.
+    // We only save images if that file doesn't exist yet.
+    int nextSaveFrame = 1; // same exponential stepping
+#endif
+
+    // For FPS in window title
     double lastTitleUpdateTime = 0.0;
     int framesSinceLastTitleUpdate = 0;
 
-    // For saving images
-    // We'll save frames when frameCount == nextSaveFrame, and then nextSaveFrame *= 2
-    int nextSaveFrame = 1;
-
-    // Minimal thread-safety for logging (optional if single-threaded)
-    std::mutex perfMutex;
-    // --- END OF ADDED/CHANGED ---
-
-    // Initialization
+private:
     void initWindow();
     void initVulkan();
     void initImGui();
+
     void createStorageImage();
     void createLightBuffers();
     void createDescriptorSetLayout();
@@ -215,6 +233,15 @@ private:
     void createNanoVDBBuffer();
     void createUniformBuffer();
 
+    void mainLoop();
+    void drawFrame();
+    void recreateSwapChain();
+    void updateDescriptorSet() const;
+    void cleanupSwapChain();
+    void cleanup();
+    static void framebufferResizeCallback(GLFWwindow* window, int width, int height);
+
+    // Returns correct pipeline based on currentAlgorithm
     VkPipeline getCurrentLightGenVkPipeline() const
     {
         switch (currentAlgorithm)
@@ -231,7 +258,6 @@ private:
             return pathLightGenPipeline->getPipeline();
         }
     }
-
     VkPipeline getCurrentComputeColorVkPipeline() const
     {
         switch (currentAlgorithm)
@@ -249,152 +275,10 @@ private:
         }
     }
 
-    // Rendering loop
-    void mainLoop();
+    // --- Helper to save image from GPU
+    void saveImage(const std::string& fileName);
 
-    // Frame rendering
-    void drawFrame();
-
-    // Swap chain recreation
-    void recreateSwapChain();
-    void updateDescriptorSet() const;
-    void cleanupSwapChain();
-
-    // Cleanup
-    void cleanup();
-
-    // Framebuffer resize callback
-    static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
-        auto app = reinterpret_cast<VolumeApp*>(glfwGetWindowUserPointer(window));
-        app->framebufferResized = true;
-    }
-
-    // --- ADDED/CHANGED ---
-    // Helper to save image from the storage image
-    // This is minimal logic to copy the GPU image to CPU and then dump via stb_image_write.
-    void saveImage(const std::string& fileName)
-    {
-        // We assume RGBA8, so 4 bytes per pixel
-        VkDeviceSize imageSize = swapChain->getExtent().width * swapChain->getExtent().height * 4;
-
-        // 1) Create a staging buffer
-        basalt::Buffer stagingBuffer(
-            *device,
-            imageSize,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-        );
-
-        // 2) Transition our storage image to TRANSFER_SRC_OPTIMAL
-        auto& cmdBuffer = *commandBuffers[currentFrame];
-        cmdBuffer.begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
-
-        VkImageMemoryBarrier barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = storageImage->getImage();
-        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        barrier.subresourceRange.baseMipLevel = 0;
-        barrier.subresourceRange.levelCount = 1;
-        barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.layerCount = 1;
-        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
-        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-
-        vkCmdPipelineBarrier(
-            *cmdBuffer.get(),
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            VK_PIPELINE_STAGE_TRANSFER_BIT,
-            0,
-            0, nullptr,
-            0, nullptr,
-            1, &barrier
-        );
-
-        // 3) Copy image to buffer
-        VkBufferImageCopy region{};
-        region.bufferOffset = 0;
-        region.bufferRowLength = 0;
-        region.bufferImageHeight = 0;
-        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        region.imageSubresource.mipLevel = 0;
-        region.imageSubresource.baseArrayLayer = 0;
-        region.imageSubresource.layerCount = 1;
-        region.imageExtent = { swapChain->getExtent().width, swapChain->getExtent().height, 1 };
-
-        vkCmdCopyImageToBuffer(
-            *cmdBuffer.get(),
-            storageImage->getImage(),
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            stagingBuffer.getBuffer(),
-            1,
-            &region
-        );
-
-        // 4) Transition image back to GENERAL
-        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-
-        vkCmdPipelineBarrier(
-            *cmdBuffer.get(),
-            VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            0,
-            0, nullptr,
-            0, nullptr,
-            1, &barrier
-        );
-
-        cmdBuffer.end();
-
-        // Submit and wait
-        VkSubmitInfo submitInfo{};
-        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        VkCommandBuffer cb = *cmdBuffer.get();
-        submitInfo.commandBufferCount = 1;
-        submitInfo.pCommandBuffers = &cb;
-
-        vkResetFences(device->getDevice(), 1, &syncObjects->getInFlightFence(currentFrame));
-        if (vkQueueSubmit(device->getGraphicsQueue(), 1, &submitInfo, syncObjects->getInFlightFence(currentFrame)) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to submit copy for screenshot!");
-        }
-
-        vkWaitForFences(device->getDevice(), 1, &syncObjects->getInFlightFence(currentFrame), VK_TRUE, UINT64_MAX);
-
-        // 5) Map staging buffer and write out to file
-        void* data;
-        vkMapMemory(device->getDevice(), stagingBuffer.getBufferMemory(), 0, imageSize, 0, &data);
-
-        // Create folder if it doesn't already exist
-        {
-            auto parentPath = std::filesystem::path(fileName).parent_path();
-            if (!parentPath.empty()) {
-                std::filesystem::create_directories(parentPath);
-            }
-        }
-
-        // Use stb_image_write
-        stbi_write_png(
-            fileName.c_str(),
-            static_cast<int>(swapChain->getExtent().width),
-            static_cast<int>(swapChain->getExtent().height),
-            4,
-            data,
-            static_cast<int>(swapChain->getExtent().width) * 4
-        );
-
-        vkUnmapMemory(device->getDevice(), stagingBuffer.getBufferMemory());
-    }
-    // --- END OF ADDED/CHANGED ---
 };
-
-// -------------- Implementation --------------
-
 void VolumeApp::initWindow() {
     if (!glfwInit()) {
         throw std::runtime_error("Failed to initialize GLFW!");
@@ -433,10 +317,24 @@ void VolumeApp::initVulkan() {
     createCommandBuffers();
     swapChain->createFramebuffers(*renderPass);
     createSyncObjects();
+
+#if defined(MEASURE_PERFORMANCE)
+    // Build a performance CSV path in the output folder, e.g. "output/performance_YYYYMMDD_HHMMSS.csv"
+    {
+        auto outDir = std::filesystem::path("output");
+        std::filesystem::create_directories(outDir); // Ensure "output" exists
+        perfLogPath = (outDir / ("performance_" + getTimestampString() + ".csv")).string();
+        perfLog.open(perfLogPath, std::ios::out);
+        if (!perfLog.is_open()) {
+            throw std::runtime_error("Failed to open performance log file: " + perfLogPath);
+        }
+        // Possibly write a header line
+        perfLog << "Algorithm,FrameTime_ms\n";
+    }
+#endif
 }
 
 void VolumeApp::initImGui() {
-    // 1. Create a descriptor pool just for ImGui
     VkDescriptorPoolSize pool_sizes[] = {
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 100 },
         { VK_DESCRIPTOR_TYPE_SAMPLER,                100 },
@@ -452,17 +350,11 @@ void VolumeApp::initImGui() {
         throw std::runtime_error("Failed to create ImGui descriptor pool!");
     }
 
-    // 2. Create the ImGui context
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    (void)io;
-
-    // 3. Initialize ImGui platform/renderer backends
     ImGui::StyleColorsDark();
     ImGui_ImplGlfw_InitForVulkan(window, true);
 
-    // Setup ImGui_ImplVulkan_InitInfo
     ImGui_ImplVulkan_InitInfo initInfo = {};
     initInfo.Instance = instance->getInstance();
     initInfo.PhysicalDevice = device->getPhysicalDevice();
@@ -480,7 +372,6 @@ void VolumeApp::initImGui() {
     initInfo.CheckVkResultFn = nullptr;
     ImGui_ImplVulkan_Init(&initInfo);
 
-    // 4. Upload fonts
     ImGui_ImplVulkan_CreateFontsTexture();
 }
 
@@ -496,7 +387,8 @@ void VolumeApp::createStorageImage() {
         swapChain->getExtent().height,
         imageFormat,
         VK_IMAGE_TILING_OPTIMAL,
-        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, // <--- allow src
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
     // Create image view
@@ -515,7 +407,6 @@ void VolumeApp::createStorageImage() {
         throw std::runtime_error("Failed to create image view!");
     }
 
-    // Transition image layout to GENERAL for storage image
     basalt::utils::transitionImageLayout(
         *device,
         *commandPool,
@@ -527,7 +418,6 @@ void VolumeApp::createStorageImage() {
 }
 
 void VolumeApp::createLightBuffers() {
-    // Create a buffer for point lights
     VkDeviceSize maxLights = 100000;
     VkDeviceSize pointLightsBufferSize = sizeof(RayLight) * maxLights;
     rayLightsBuffer = std::make_unique<basalt::Buffer>(
@@ -536,7 +426,6 @@ void VolumeApp::createLightBuffers() {
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
     );
 
-    // Buffer for the counter
     VkDeviceSize counterBufferSize = sizeof(LightCountBuffer);
     lightCounterBuffer = std::make_unique<basalt::Buffer>(
         *device, counterBufferSize,
@@ -546,42 +435,36 @@ void VolumeApp::createLightBuffers() {
 }
 
 void VolumeApp::createDescriptorSetLayout() {
-    // Binding 0: Storage image
     VkDescriptorSetLayoutBinding storageImageLayoutBinding{};
     storageImageLayoutBinding.binding = 0;
     storageImageLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     storageImageLayoutBinding.descriptorCount = 1;
     storageImageLayoutBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
-    // Binding 1: Combined image sampler
     VkDescriptorSetLayoutBinding samplerLayoutBinding{};
     samplerLayoutBinding.binding = 1;
     samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     samplerLayoutBinding.descriptorCount = 1;
     samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    // Binding 2: Storage buffer for NanoVDB
     VkDescriptorSetLayoutBinding storageBufferLayoutBinding{};
     storageBufferLayoutBinding.binding = 2;
     storageBufferLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     storageBufferLayoutBinding.descriptorCount = 1;
     storageBufferLayoutBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
-    // Binding 3: Point lights buffer
     VkDescriptorSetLayoutBinding pointLightsBinding{};
     pointLightsBinding.binding = 3;
     pointLightsBinding.descriptorCount = 1;
     pointLightsBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     pointLightsBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
-    // Binding 4: Light counter buffer
     VkDescriptorSetLayoutBinding lightCounterBinding{};
     lightCounterBinding.binding = 4;
     lightCounterBinding.descriptorCount = 1;
     lightCounterBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     lightCounterBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
-    // Binding 5: Uniform buffer
     VkDescriptorSetLayoutBinding uniformBufferLayoutBinding{};
     uniformBufferLayoutBinding.binding = 5;
     uniformBufferLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -662,58 +545,10 @@ void VolumeApp::createComputePipeline() {
     pathComputeColorPipeline = std::make_unique<basalt::ComputePipeline>(*device, PATH_COMPUTE_SHADER_PATH, computePipelineLayout);
 }
 
-void VolumeApp::createSampler() {
-    VkSamplerCreateInfo samplerInfo{};
-    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerInfo.magFilter = VK_FILTER_NEAREST;
-    samplerInfo.minFilter = VK_FILTER_NEAREST;
-    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.anisotropyEnable = VK_FALSE;
-    samplerInfo.maxAnisotropy = 1.0f;
-    samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
-    samplerInfo.unnormalizedCoordinates = VK_FALSE;
-    samplerInfo.compareEnable = VK_FALSE;
-    samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
-    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-
-    if (vkCreateSampler(device->getDevice(), &samplerInfo, nullptr, &sampler) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create sampler!");
-    }
-}
-
-void VolumeApp::createUniformBuffer() {
-    VkDeviceSize bufferSize = sizeof(UBO);
-    uniformBuffer = std::make_unique<basalt::Buffer>(*device, bufferSize,
-        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
-    // Set UBO values
-    uboData.frameCount = 0;
-    uboData.framebufferDim = glm::uvec2(swapChain->getExtent().width, swapChain->getExtent().height);
-    uboData.cameraPos = glm::vec3(0.0, 20.0, -75.0);
-    uboData.fov = 45.0f;
-    uboData.photonInitialIntensity = 100.0f;
-    uboData.scatteringProbability = 0.05f;
-    uboData.absorptionCoefficient = 0.05f;
-    uboData.maxLights = 1000;
-    uboData.rayMaxDistance = 2500.0f;
-    uboData.rayMarchingStepSize = 1.0f;
-    uboData.lightSourceWorldPos = glm::vec3(-20.0, 15.0, -15.0);
-    uboData.beamRadius = 0.1f;
-    uboData.lightRayStepSize = 0.3f;
-    uboData.radiusFalloff = 0.5f;
-
-    uniformBuffer->updateBuffer(*commandPool, &uboData, sizeof(UBO));
-}
-
 void VolumeApp::createGraphicsPipeline() {
-    // Empty vertex input state
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 
-    // Create pipeline layout
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     const VkDescriptorSetLayout layouts[] = { descriptorSetLayout->getLayout() };
@@ -745,402 +580,107 @@ void VolumeApp::createSyncObjects() {
     syncObjects = std::make_unique<basalt::SyncObjects>(*device, MAX_FRAMES_IN_FLIGHT);
 }
 
-void VolumeApp::mainLoop() {
-    // --- ADDED/CHANGED ---
-    double startTime = glfwGetTime();
-    lastTitleUpdateTime = startTime;
-    // --- END OF ADDED/CHANGED ---
+void VolumeApp::createSampler() {
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_NEAREST;
+    samplerInfo.minFilter = VK_FILTER_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.anisotropyEnable = VK_FALSE;
+    samplerInfo.maxAnisotropy = 1.0f;
+    samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    samplerInfo.unnormalizedCoordinates = VK_FALSE;
+    samplerInfo.compareEnable = VK_FALSE;
+    samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
 
-    while (!glfwWindowShouldClose(window)) {
-        glfwPollEvents();
-        drawFrame();
-
-        // --- ADDED/CHANGED ---
-        // Update FPS once per second
-        double currentTime = glfwGetTime();
-        framesSinceLastTitleUpdate++;
-        if (currentTime - lastTitleUpdateTime >= 1.0) {
-            double fps = framesSinceLastTitleUpdate / (currentTime - lastTitleUpdateTime);
-            char title[256];
-            std::snprintf(title, sizeof(title), "Volume Renderer - [FPS: %.2f]", fps);
-            glfwSetWindowTitle(window, title);
-            framesSinceLastTitleUpdate = 0;
-            lastTitleUpdateTime = currentTime;
-        }
-        // --- END OF ADDED/CHANGED ---
+    if (vkCreateSampler(device->getDevice(), &samplerInfo, nullptr, &sampler) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create sampler!");
     }
-    vkDeviceWaitIdle(device->getDevice());
 }
 
-double calculateRadius(double previousRadius, double alpha) {
-    int photonCount = 4 * 4; // Number of photons per pass
-    double squaredRadius = previousRadius * previousRadius;
-    for (int k = 1; k < photonCount; ++k) {
-        squaredRadius *= static_cast<double>(k + alpha) / k;
-    }
-    squaredRadius = std::pow(squaredRadius, 1.0 / photonCount);
-    return std::sqrt(squaredRadius);
-}
+void VolumeApp::createUniformBuffer() {
+    VkDeviceSize bufferSize = sizeof(UBO);
+    uniformBuffer = std::make_unique<basalt::Buffer>(*device, bufferSize,
+        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-void VolumeApp::drawFrame() {
-    // --- ADDED/CHANGED ---
-    frameStartTime = std::chrono::steady_clock::now();
-    // --- END OF ADDED/CHANGED ---
-
-    syncObjects->waitForInFlightFence(currentFrame);
-
-    uint32_t imageIndex;
-    VkResult result = swapChain->acquireNextImage(*syncObjects, currentFrame, imageIndex);
-
-    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-        recreateSwapChain();
-        return;
-    }
-    else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
-        throw std::runtime_error("Failed to acquire swap chain image!");
-    }
-
-    syncObjects->resetInFlightFence(currentFrame);
-
-    // ImGui: Start new frame
-    ImGui_ImplVulkan_NewFrame();
-    ImGui_ImplGlfw_NewFrame();
-    ImGui::NewFrame();
-
-    // Optional: ImGui::ShowDemoWindow();
-
-    ImGui::Begin("Settings");
-    {
-        static const char* algorithmNames[] = { "Beam", "Ray", "Point", "Sphere", "Path" };
-        int currentItem = static_cast<int>(currentAlgorithm);
-        if (ImGui::Combo("Algorithm", &currentItem, algorithmNames, IM_ARRAYSIZE(algorithmNames))) {
-            currentAlgorithm = static_cast<Algorithms>(currentItem);
-            // Reset the frame counter when changing algorithms
-            uboData.frameCount = 0;
-            nextSaveFrame = 1; // also reset the screenshot step 
-        }
-    }
-    ImGui::SliderFloat3("Camera Pos", &uboData.cameraPos.x, -200.0f, 200.0f);
-    ImGui::SliderFloat("Photon Intensity", &uboData.photonInitialIntensity, 0.0f, 500.0f);
-    ImGui::SliderFloat("Scattering Probability", &uboData.scatteringProbability, 0.0f, 1.0f);
-    ImGui::SliderFloat("Absorption Coeff", &uboData.absorptionCoefficient, 0.0f, 1.0f);
-    int maxLightsTmp = static_cast<int>(uboData.maxLights);
-    if (ImGui::DragInt("Max Lights", &maxLightsTmp, 1.0f, 0, 1000000)) {
-        uboData.maxLights = static_cast<uint32_t>(maxLightsTmp);
-    }
-    ImGui::SliderFloat("Ray Max Dist", &uboData.rayMaxDistance, 0.0f, 20000.0f);
-    ImGui::SliderFloat("Ray Step Size", &uboData.rayMarchingStepSize, 0.0f, 10.0f);
-    ImGui::SliderFloat3("Light Source Pos", &uboData.lightSourceWorldPos.x, -100.0f, 100.0f);
-    ImGui::SliderFloat("Beam Radius", &uboData.beamRadius, 0.0f, 10.0f);
-    ImGui::SliderFloat("Light Step Size", &uboData.lightRayStepSize, 0.0f, 10.0f);
-
-    if (ImGui::Button("Refresh")) {
-        uboData.frameCount = 0;
-        nextSaveFrame = 1;
-    }
-    ImGui::End();
-    ImGui::Render();
-
-    // Increase frame counter
-    uboData.frameCount++;
-    uniformBuffer->updateBuffer(*commandPool, &uboData, sizeof(UBO));
-
-    auto& cmdBuffer = *commandBuffers[currentFrame];
-    cmdBuffer.begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
-
-    // Reset the light counter to zero
-    vkCmdFillBuffer(
-        *cmdBuffer.get(),
-        lightCounterBuffer->getBuffer(),
-        0,
-        sizeof(LightCountBuffer),
-        0
-    );
-
-    // Clear image if first frame
-    if (uboData.frameCount == 1) {
-        VkClearColorValue clearColorValue = {};
-        clearColorValue.float32[0] = 0.0f;
-        clearColorValue.float32[1] = 0.0f;
-        clearColorValue.float32[2] = 0.0f;
-        clearColorValue.float32[3] = 1.0f;
-
-        VkImageSubresourceRange subresourceRange = {};
-        subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        subresourceRange.baseMipLevel = 0;
-        subresourceRange.levelCount = 1;
-        subresourceRange.baseArrayLayer = 0;
-        subresourceRange.layerCount = 1;
-
-        // Transition from GENERAL -> TRANSFER_DST_OPTIMAL
-        {
-            VkImageMemoryBarrier barrier{};
-            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.image = storageImage->getImage();
-            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            barrier.subresourceRange.baseMipLevel = 0;
-            barrier.subresourceRange.levelCount = 1;
-            barrier.subresourceRange.baseArrayLayer = 0;
-            barrier.subresourceRange.layerCount = 1;
-
-            vkCmdPipelineBarrier(
-                *cmdBuffer.get(),
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                VK_PIPELINE_STAGE_TRANSFER_BIT,
-                0,
-                0, nullptr,
-                0, nullptr,
-                1, &barrier
-            );
-        }
-
-        // Clear
-        vkCmdClearColorImage(*cmdBuffer.get(),
-            storageImage->getImage(),
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            &clearColorValue,
-            1, &subresourceRange);
-
-        // Transition back
-        {
-            VkImageMemoryBarrier barrier{};
-            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.image = storageImage->getImage();
-            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            barrier.subresourceRange.baseMipLevel = 0;
-            barrier.subresourceRange.levelCount = 1;
-            barrier.subresourceRange.baseArrayLayer = 0;
-            barrier.subresourceRange.layerCount = 1;
-            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-
-            vkCmdPipelineBarrier(
-                *cmdBuffer.get(),
-                VK_PIPELINE_STAGE_TRANSFER_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                0,
-                0, nullptr,
-                0, nullptr,
-                1, &barrier
-            );
-        }
-    }
-
-    // 1) Light generation
-    vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, getCurrentLightGenVkPipeline());
-    vkCmdBindDescriptorSets(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, lightGenPipelineLayout,
-        0, 1, &descriptorSet, 0, nullptr);
-    vkCmdDispatch(*cmdBuffer.get(), 1, 1, 1);
-
-    // Memory barrier
-    VkMemoryBarrier memoryBarrier1{};
-    memoryBarrier1.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    memoryBarrier1.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    memoryBarrier1.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    vkCmdPipelineBarrier(
-        *cmdBuffer.get(),
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        0,
-        1, &memoryBarrier1,
-        0, nullptr,
-        0, nullptr
-    );
-
-    // 2) Main compute
-    vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, getCurrentComputeColorVkPipeline());
-    vkCmdBindDescriptorSets(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout,
-        0, 1, &descriptorSet, 0, nullptr);
-    uint32_t groupCountX = (swapChain->getExtent().width + 15) / 16;
-    uint32_t groupCountY = (swapChain->getExtent().height + 15) / 16;
-    vkCmdDispatch(*cmdBuffer.get(), groupCountX, groupCountY, 1);
-
-    // Barrier for fragment shader
-    VkImageMemoryBarrier imageBarrier{};
-    imageBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    imageBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    imageBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-    imageBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    imageBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    imageBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    imageBarrier.image = storageImage->getImage();
-    imageBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    imageBarrier.subresourceRange.baseMipLevel = 0;
-    imageBarrier.subresourceRange.levelCount = 1;
-    imageBarrier.subresourceRange.baseArrayLayer = 0;
-    imageBarrier.subresourceRange.layerCount = 1;
-    vkCmdPipelineBarrier(
-        *cmdBuffer.get(),
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        0,
-        0, nullptr,
-        0, nullptr,
-        1, &imageBarrier
-    );
-
-    // 3) Begin render pass
-    VkClearValue clearColor = { { 0.0f, 0.0f, 0.0f, 1.0f } };
-    VkRenderPassBeginInfo renderPassInfo{};
-    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    renderPassInfo.renderPass = renderPass->getRenderPass();
-    renderPassInfo.framebuffer = swapChain->getFramebuffers()[imageIndex];
-    renderPassInfo.renderArea.offset = { 0, 0 };
-    renderPassInfo.renderArea.extent = swapChain->getExtent();
-    renderPassInfo.clearValueCount = 1;
-    renderPassInfo.pClearValues = &clearColor;
-
-    vkCmdBeginRenderPass(*cmdBuffer.get(), &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-    // 4) Fullscreen quad
-    vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline->getPipeline());
-    vkCmdBindDescriptorSets(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout,
-        0, 1, &descriptorSet, 0, nullptr);
-    vkCmdDraw(*cmdBuffer.get(), 3, 1, 0, 0);
-
-    // 5) Render ImGui
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), *cmdBuffer.get());
-
-    vkCmdEndRenderPass(*cmdBuffer.get());
-
-    cmdBuffer.end();
-
-    // Submit
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-
-    VkSemaphore waitSemaphores[] = { syncObjects->getImageAvailableSemaphore(currentFrame) };
-    VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
-    submitInfo.waitSemaphoreCount = 1;
-    submitInfo.pWaitSemaphores = waitSemaphores;
-    submitInfo.pWaitDstStageMask = waitStages;
-
-    VkCommandBuffer submitCmdBuffer = *cmdBuffer.get();
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &submitCmdBuffer;
-
-    VkSemaphore signalSemaphores[] = { syncObjects->getRenderFinishedSemaphore(currentFrame) };
-    submitInfo.signalSemaphoreCount = 1;
-    submitInfo.pSignalSemaphores = signalSemaphores;
-
-    if (vkQueueSubmit(device->getGraphicsQueue(), 1, &submitInfo, syncObjects->getInFlightFence(currentFrame)) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to submit draw command buffer!");
-    }
-
-    // Present
-    VkPresentInfoKHR presentInfo{};
-    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-    presentInfo.waitSemaphoreCount = 1;
-    presentInfo.pWaitSemaphores = signalSemaphores;
-    VkSwapchainKHR swapChains[] = { swapChain->getSwapChain() };
-    presentInfo.swapchainCount = 1;
-    presentInfo.pSwapchains = swapChains;
-    presentInfo.pImageIndices = &imageIndex;
-
-    result = vkQueuePresentKHR(device->getPresentQueue(), &presentInfo);
-
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
-        framebufferResized = false;
-        recreateSwapChain();
-    }
-    else if (result != VK_SUCCESS) {
-        throw std::runtime_error("Failed to present swap chain image!");
-    }
-
-    // --- ADDED/CHANGED ---
-    // 1) Measure time and save to CSV if algorithm = RAY, POINT, or PATH
-    frameEndTime = std::chrono::steady_clock::now();
-    double ms = std::chrono::duration<double, std::milli>(frameEndTime - frameStartTime).count();
-
-    {
-        std::lock_guard<std::mutex> lock(perfMutex);
-        if (currentAlgorithm == RAY || currentAlgorithm == POINT || currentAlgorithm == PATH) {
-            perfLog << (currentAlgorithm == RAY ? "Ray" :
-                currentAlgorithm == POINT ? "Point" :
-                "Path")
-                << "," << ms << std::endl;
-        }
-    }
-
-    // 2) Save screenshot if it's time
-    if (currentAlgorithm == RAY || currentAlgorithm == POINT || currentAlgorithm == PATH) {
-        if (static_cast<int>(uboData.frameCount) == nextSaveFrame) {
-            // Construct an output path
-            std::string folderName = (currentAlgorithm == RAY ? "output/ray" :
-                (currentAlgorithm == POINT ? "output/point" :
-                    "output/path"));
-            std::filesystem::create_directories(folderName);
-
-            // e.g. output/ray/frame_16.png
-            std::stringstream ss;
-            ss << folderName << "/frame_" << uboData.frameCount << ".png";
-
-            // Save
-            saveImage(ss.str());
-
-            // Next
-            nextSaveFrame *= 2;
-        }
-    }
-    // --- END OF ADDED/CHANGED ---
-
-    currentFrame = (currentFrame + 1) % syncObjects->getMaxFramesInFlight();
-}
-
-void VolumeApp::recreateSwapChain() {
     uboData.frameCount = 0;
-    nextSaveFrame = 1; // reset
+    uboData.framebufferDim = glm::uvec2(swapChain->getExtent().width, swapChain->getExtent().height);
+    uboData.cameraPos = glm::vec3(0.0, 20.0, -75.0);
+    uboData.fov = 45.0f;
+    uboData.photonInitialIntensity = 100.0f;
+    uboData.scatteringProbability = 0.05f;
+    uboData.absorptionCoefficient = 0.05f;
+    uboData.maxLights = 1000;
+    uboData.rayMaxDistance = 2500.0f;
+    uboData.rayMarchingStepSize = 1.0f;
+    uboData.lightSourceWorldPos = glm::vec3(-20.0, 15.0, -15.0);
+    uboData.beamRadius = 0.1f;
+    uboData.lightRayStepSize = 0.3f;
+    uboData.radiusFalloff = 0.5f;
 
-    int width = 0, height = 0;
-    glfwGetFramebufferSize(window, &width, &height);
-    while (width == 0 || height == 0) {
-        glfwWaitEvents();
-        glfwGetFramebufferSize(window, &width, &height);
+    uniformBuffer->updateBuffer(*commandPool, &uboData, sizeof(UBO));
+}
+
+void VolumeApp::createNanoVDBBuffer() {
+    openvdb::initialize();
+    const std::string filename = "../../../../resources/bunny_cloud.vdb";
+
+    openvdb::io::File file(filename);
+    try {
+        file.open();
+    }
+    catch (const openvdb::IoError& e) {
+        std::cerr << "Error opening file " << filename << ": " << e.what() << '\n';
+        throw std::runtime_error("Failed to open VDB file.");
     }
 
-    vkDeviceWaitIdle(device->getDevice());
-    cleanupSwapChain();
+    openvdb::GridBase::Ptr baseGrid_openvdb;
+    openvdb::FloatGrid::Ptr grid_openvdb;
 
-    swapChain = std::make_unique<basalt::SwapChain>(*device, *surface, window);
-    renderPass = std::make_unique<basalt::RenderPass>(*device, swapChain->getImageFormat());
-    createStorageImage();
-    updateDescriptorSet();
-    createLightGenPipeline();
-    createComputePipeline();
-    createGraphicsPipeline();
-    swapChain->createFramebuffers(*renderPass);
-    createCommandBuffers();
+    for (auto nameIter = file.beginName(); nameIter != file.endName(); ++nameIter) {
+        baseGrid_openvdb = file.readGrid(nameIter.gridName());
+        grid_openvdb = openvdb::gridPtrCast<openvdb::FloatGrid>(baseGrid_openvdb);
+        if (grid_openvdb) {
+            std::cout << "Loaded grid: " << nameIter.gridName() << '\n';
+            break;
+        }
+    }
+    file.close();
 
-    // Re-initialize the ImGui renderer to match the new swapchain
-    ImGui_ImplVulkan_SetMinImageCount(2);
-    ImGui_ImplVulkan_Shutdown();
-    ImGui_ImplVulkan_InitInfo initInfo = {};
-    initInfo.Instance = instance->getInstance();
-    initInfo.PhysicalDevice = device->getPhysicalDevice();
-    initInfo.Device = device->getDevice();
-    initInfo.QueueFamily = device->getGraphicsQueueFamilyIndex();
-    initInfo.Queue = device->getGraphicsQueue();
-    initInfo.DescriptorPool = imguiDescriptorPool;
-    initInfo.RenderPass = renderPass->getRenderPass();
-    initInfo.PipelineCache = VK_NULL_HANDLE;
-    initInfo.Subpass = 0;
-    initInfo.MinImageCount = 2;
-    initInfo.ImageCount = static_cast<uint32_t>(swapChain->getFramebuffers().size());
-    initInfo.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-    initInfo.Allocator = nullptr;
-    initInfo.CheckVkResultFn = nullptr;
+    if (!grid_openvdb) {
+        std::cerr << "No FloatGrid found in " << filename << '\n';
+        openvdb::uninitialize();
+        throw std::runtime_error("Failed to find FloatGrid in VDB file.");
+    }
 
-    ImGui_ImplVulkan_Init(&initInfo);
-    ImGui_ImplVulkan_CreateFontsTexture();
+    auto handle = nanovdb::tools::createNanoGrid(*grid_openvdb);
+    const void* gridData = handle.data();
+    size_t gridSize = handle.size();
+
+    VkDeviceSize bufferSize = static_cast<VkDeviceSize>(gridSize);
+
+    nanoVDBBuffer = std::make_unique<basalt::Buffer>(
+        *device,
+        bufferSize,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    basalt::Buffer stagingBuffer(
+        *device,
+        bufferSize,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    stagingBuffer.updateBuffer(*commandPool, gridData, bufferSize);
+
+    basalt::utils::copyBuffer(*device, *commandPool, device->getGraphicsQueue(),
+        stagingBuffer.getBuffer(), nanoVDBBuffer->getBuffer(), bufferSize);
+
+    openvdb::uninitialize();
 }
 
 void VolumeApp::updateDescriptorSet() const {
@@ -1197,7 +737,7 @@ void VolumeApp::updateDescriptorSet() const {
     descriptorWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     descriptorWrites[3].pBufferInfo = &rayLightsBufferInfo;
 
-    // (4) Light counter buffer
+    // (4) Light count buffer
     VkDescriptorBufferInfo lightCounterBufferInfo{};
     lightCounterBufferInfo.buffer = lightCounterBuffer->getBuffer();
     lightCounterBufferInfo.offset = 0;
@@ -1227,6 +767,496 @@ void VolumeApp::updateDescriptorSet() const {
         static_cast<uint32_t>(descriptorWrites.size()),
         descriptorWrites.data(),
         0, nullptr);
+}
+
+void VolumeApp::saveImage(const std::string& fileName)
+{
+    VkDeviceSize imageSize = swapChain->getExtent().width * swapChain->getExtent().height * 4;
+
+    basalt::Buffer stagingBuffer(
+        *device,
+        imageSize,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
+
+    auto& cmdBuffer = *commandBuffers[currentFrame];
+    cmdBuffer.begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = storageImage->getImage();
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+    vkCmdPipelineBarrier(
+        *cmdBuffer.get(),
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0,
+        0, nullptr,
+        0, nullptr,
+        1, &barrier
+    );
+
+    VkBufferImageCopy region{};
+    region.bufferOffset = 0;
+    region.bufferRowLength = 0;
+    region.bufferImageHeight = 0;
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.mipLevel = 0;
+    region.imageSubresource.baseArrayLayer = 0;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent = { swapChain->getExtent().width, swapChain->getExtent().height, 1 };
+
+    vkCmdCopyImageToBuffer(
+        *cmdBuffer.get(),
+        storageImage->getImage(),
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        stagingBuffer.getBuffer(),
+        1,
+        &region
+    );
+
+    // Transition back
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+
+    vkCmdPipelineBarrier(
+        *cmdBuffer.get(),
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0,
+        0, nullptr,
+        0, nullptr,
+        1, &barrier
+    );
+
+    cmdBuffer.end();
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    VkCommandBuffer cb = *cmdBuffer.get();
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cb;
+
+    vkResetFences(device->getDevice(), 1, &syncObjects->getInFlightFence(currentFrame));
+    if (vkQueueSubmit(device->getGraphicsQueue(), 1, &submitInfo, syncObjects->getInFlightFence(currentFrame)) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to submit copy for screenshot!");
+    }
+
+    vkWaitForFences(device->getDevice(), 1, &syncObjects->getInFlightFence(currentFrame), VK_TRUE, UINT64_MAX);
+
+    void* data;
+    vkMapMemory(device->getDevice(), stagingBuffer.getBufferMemory(), 0, imageSize, 0, &data);
+
+    // Make directories if needed
+    auto parentPath = std::filesystem::path(fileName).parent_path();
+    if (!parentPath.empty()) {
+        std::filesystem::create_directories(parentPath);
+    }
+
+    // Actually write out the PNG
+    stbi_write_png(
+        fileName.c_str(),
+        static_cast<int>(swapChain->getExtent().width),
+        static_cast<int>(swapChain->getExtent().height),
+        4,
+        data,
+        static_cast<int>(swapChain->getExtent().width) * 4
+    );
+
+    vkUnmapMemory(device->getDevice(), stagingBuffer.getBufferMemory());
+}
+
+void VolumeApp::mainLoop() {
+    double startTime = glfwGetTime();
+    lastTitleUpdateTime = startTime;
+
+    while (!glfwWindowShouldClose(window)) {
+        glfwPollEvents();
+        drawFrame();
+
+        // Update FPS once per second
+        double currentTime = glfwGetTime();
+        framesSinceLastTitleUpdate++;
+        if (currentTime - lastTitleUpdateTime >= 1.0) {
+            double fps = framesSinceLastTitleUpdate / (currentTime - lastTitleUpdateTime);
+            char title[256];
+            std::snprintf(title, sizeof(title), "Volume Renderer - %d [FPS: %.2f]", uboData.frameCount, fps);
+            glfwSetWindowTitle(window, title);
+            framesSinceLastTitleUpdate = 0;
+            lastTitleUpdateTime = currentTime;
+        }
+    }
+    vkDeviceWaitIdle(device->getDevice());
+}
+
+void VolumeApp::drawFrame() {
+#if defined(MEASURE_PERFORMANCE)
+    frameStartTime = std::chrono::steady_clock::now();
+#endif
+
+    syncObjects->waitForInFlightFence(currentFrame);
+
+    uint32_t imageIndex;
+    VkResult result = swapChain->acquireNextImage(*syncObjects, currentFrame, imageIndex);
+
+    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        recreateSwapChain();
+        return;
+    }
+    else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+        throw std::runtime_error("Failed to acquire swap chain image!");
+    }
+
+    syncObjects->resetInFlightFence(currentFrame);
+
+    // ImGui
+    ImGui_ImplVulkan_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+
+    ImGui::Begin("Settings");
+    {
+        static const char* algorithmNames[] = { "Beam", "Ray", "Point", "Sphere", "Path" };
+        int currentItem = static_cast<int>(currentAlgorithm);
+        if (ImGui::Combo("Algorithm", &currentItem, algorithmNames, IM_ARRAYSIZE(algorithmNames))) {
+            currentAlgorithm = static_cast<Algorithms>(currentItem);
+            uboData.frameCount = 0;
+#if defined(MEASURE_PERFORMANCE) || defined(MEASURE_QUALITY)
+            nextSaveFrame = 1;
+#endif
+        }
+    }
+    ImGui::SliderFloat3("Camera Pos", &uboData.cameraPos.x, -200.0f, 200.0f);
+    ImGui::SliderFloat("Photon Intensity", &uboData.photonInitialIntensity, 0.0f, 500.0f);
+    ImGui::SliderFloat("Scattering Probability", &uboData.scatteringProbability, 0.0f, 1.0f);
+    ImGui::SliderFloat("Absorption Coeff", &uboData.absorptionCoefficient, 0.0f, 1.0f);
+    int maxLightsTmp = static_cast<int>(uboData.maxLights);
+    if (ImGui::DragInt("Max Lights", &maxLightsTmp, 1.0f, 0, 1000000)) {
+        uboData.maxLights = static_cast<uint32_t>(maxLightsTmp);
+    }
+    ImGui::SliderFloat("Ray Max Dist", &uboData.rayMaxDistance, 0.0f, 20000.0f);
+    ImGui::SliderFloat("Ray Step Size", &uboData.rayMarchingStepSize, 0.0f, 10.0f);
+    ImGui::SliderFloat3("Light Source Pos", &uboData.lightSourceWorldPos.x, -100.0f, 100.0f);
+    ImGui::SliderFloat("Beam Radius", &uboData.beamRadius, 0.0f, 10.0f);
+    ImGui::SliderFloat("Light Step Size", &uboData.lightRayStepSize, 0.0f, 10.0f);
+
+    if (ImGui::Button("Refresh")) {
+        uboData.frameCount = 0;
+#if defined(MEASURE_PERFORMANCE) || defined(MEASURE_QUALITY)
+        nextSaveFrame = 1;
+#endif
+    }
+    ImGui::End();
+    ImGui::Render();
+
+    // Update UBO
+    uboData.frameCount++;
+    uniformBuffer->updateBuffer(*commandPool, &uboData, sizeof(UBO));
+
+    // Record command buffer
+    auto& cmdBuffer = *commandBuffers[currentFrame];
+    cmdBuffer.begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+
+    // Reset the light counter
+    vkCmdFillBuffer(
+        *cmdBuffer.get(),
+        lightCounterBuffer->getBuffer(),
+        0,
+        sizeof(LightCountBuffer),
+        0
+    );
+
+    // Clear image if first frame
+    if (uboData.frameCount == 1) {
+        VkClearColorValue clearColorValue{};
+        clearColorValue.float32[0] = 0.0f;
+        clearColorValue.float32[1] = 0.0f;
+        clearColorValue.float32[2] = 0.0f;
+        clearColorValue.float32[3] = 1.0f;
+
+        VkImageSubresourceRange subresourceRange{};
+        subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        subresourceRange.baseMipLevel = 0;
+        subresourceRange.levelCount = 1;
+        subresourceRange.baseArrayLayer = 0;
+        subresourceRange.layerCount = 1;
+
+        VkImageMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = storageImage->getImage();
+        barrier.subresourceRange = subresourceRange;
+
+        vkCmdPipelineBarrier(
+            *cmdBuffer.get(),
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0,
+            0, nullptr,
+            0, nullptr,
+            1, &barrier
+        );
+
+        vkCmdClearColorImage(*cmdBuffer.get(),
+            storageImage->getImage(),
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            &clearColorValue,
+            1, &subresourceRange);
+
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+
+        vkCmdPipelineBarrier(
+            *cmdBuffer.get(),
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0,
+            0, nullptr,
+            0, nullptr,
+            1, &barrier
+        );
+    }
+
+    // 1) Light generation
+    vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, getCurrentLightGenVkPipeline());
+    vkCmdBindDescriptorSets(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, lightGenPipelineLayout,
+        0, 1, &descriptorSet, 0, nullptr);
+    vkCmdDispatch(*cmdBuffer.get(), 1, 1, 1);
+
+    VkMemoryBarrier memoryBarrier1{};
+    memoryBarrier1.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    memoryBarrier1.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    memoryBarrier1.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(
+        *cmdBuffer.get(),
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        0,
+        1, &memoryBarrier1,
+        0, nullptr,
+        0, nullptr
+    );
+
+    // 2) Main compute
+    vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, getCurrentComputeColorVkPipeline());
+    vkCmdBindDescriptorSets(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout,
+        0, 1, &descriptorSet, 0, nullptr);
+    uint32_t groupCountX = (swapChain->getExtent().width + 15) / 16;
+    uint32_t groupCountY = (swapChain->getExtent().height + 15) / 16;
+    vkCmdDispatch(*cmdBuffer.get(), groupCountX, groupCountY, 1);
+
+    // Barrier
+    VkImageMemoryBarrier imageBarrier{};
+    imageBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    imageBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    imageBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    imageBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    imageBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    imageBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    imageBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    imageBarrier.image = storageImage->getImage();
+    imageBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    imageBarrier.subresourceRange.baseMipLevel = 0;
+    imageBarrier.subresourceRange.levelCount = 1;
+    imageBarrier.subresourceRange.baseArrayLayer = 0;
+    imageBarrier.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(
+        *cmdBuffer.get(),
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0,
+        0, nullptr,
+        0, nullptr,
+        1, &imageBarrier
+    );
+
+    // 3) Render pass
+    VkClearValue clearValue{};
+    clearValue.color = { { 0.f, 0.f, 0.f, 1.f } };
+    VkRenderPassBeginInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    renderPassInfo.renderPass = renderPass->getRenderPass();
+    renderPassInfo.framebuffer = swapChain->getFramebuffers()[imageIndex];
+    renderPassInfo.renderArea.offset = { 0, 0 };
+    renderPassInfo.renderArea.extent = swapChain->getExtent();
+    renderPassInfo.clearValueCount = 1;
+    renderPassInfo.pClearValues = &clearValue;
+
+    vkCmdBeginRenderPass(*cmdBuffer.get(), &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    // 4) Fullscreen
+    vkCmdBindPipeline(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline->getPipeline());
+    vkCmdBindDescriptorSets(*cmdBuffer.get(), VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout,
+        0, 1, &descriptorSet, 0, nullptr);
+    vkCmdDraw(*cmdBuffer.get(), 3, 1, 0, 0);
+
+    // 5) ImGui
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), *cmdBuffer.get());
+    vkCmdEndRenderPass(*cmdBuffer.get());
+
+    cmdBuffer.end();
+
+    // Submit
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+    VkSemaphore waitSemaphores[] = { syncObjects->getImageAvailableSemaphore(currentFrame) };
+    VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+    submitInfo.waitSemaphoreCount = 1;
+    submitInfo.pWaitSemaphores = waitSemaphores;
+    submitInfo.pWaitDstStageMask = waitStages;
+
+    VkCommandBuffer submitCmdBuffer = *cmdBuffer.get();
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &submitCmdBuffer;
+
+    VkSemaphore signalSemaphores[] = { syncObjects->getRenderFinishedSemaphore(currentFrame) };
+    submitInfo.signalSemaphoreCount = 1;
+    submitInfo.pSignalSemaphores = signalSemaphores;
+
+    if (vkQueueSubmit(device->getGraphicsQueue(), 1, &submitInfo, syncObjects->getInFlightFence(currentFrame)) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to submit draw command buffer!");
+    }
+
+    // Present
+    VkPresentInfoKHR presentInfo{};
+    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.pWaitSemaphores = signalSemaphores;
+    VkSwapchainKHR swapChains[] = { swapChain->getSwapChain() };
+    presentInfo.swapchainCount = 1;
+    presentInfo.pSwapchains = swapChains;
+    presentInfo.pImageIndices = &imageIndex;
+
+    result = vkQueuePresentKHR(device->getPresentQueue(), &presentInfo);
+
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
+        framebufferResized = false;
+        recreateSwapChain();
+    }
+    else if (result != VK_SUCCESS) {
+        throw std::runtime_error("Failed to present swap chain image!");
+    }
+
+#if defined(MEASURE_PERFORMANCE)
+    frameEndTime = std::chrono::steady_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(frameEndTime - frameStartTime).count();
+
+    if (currentAlgorithm == RAY || currentAlgorithm == POINT || currentAlgorithm == PATH) {
+        std::lock_guard<std::mutex> lock(perfMutex);
+        if (perfLog.is_open()) {
+            perfLog << (currentAlgorithm == RAY ? "Ray" :
+                currentAlgorithm == POINT ? "Point" :
+                "Path")
+                << "," << ms << "\n";
+        }
+    }
+
+    // Save screenshot on exponential frames
+    if (currentAlgorithm == RAY || currentAlgorithm == POINT || currentAlgorithm == PATH) {
+        if (static_cast<int>(uboData.frameCount) == nextSaveFrame) {
+            // We'll incorporate a timestamp into the file name
+            // e.g. output/ray/frame_16_20250104_123456.png
+            auto nowStr = getTimestampString();
+            std::string folderName = (currentAlgorithm == RAY ? "output/ray" :
+                (currentAlgorithm == POINT ? "output/point" :
+                    "output/path"));
+            std::stringstream ss;
+            ss << folderName << "/frame_" << uboData.frameCount << "_" << nowStr << ".png";
+
+            saveImage(ss.str());
+            nextSaveFrame *= 2;
+        }
+    }
+
+#elif defined(MEASURE_QUALITY)
+    if (currentAlgorithm == RAY || currentAlgorithm == POINT || currentAlgorithm == PATH) {
+        if (static_cast<int>(uboData.frameCount) == nextSaveFrame) {
+            // We only save if the file doesn't exist
+            std::string folderName = (currentAlgorithm == RAY ? "output/ray" :
+                (currentAlgorithm == POINT ? "output/point" :
+                    "output/path"));
+            std::stringstream ss;
+            ss << folderName << "/frame_" << uboData.frameCount << ".png";
+            auto outPath = ss.str();
+
+            if (!std::filesystem::exists(outPath)) {
+                saveImage(outPath);
+            }
+            nextSaveFrame *= 2;
+        }
+    }
+#endif
+
+    currentFrame = (currentFrame + 1) % syncObjects->getMaxFramesInFlight();
+}
+
+void VolumeApp::recreateSwapChain() {
+    uboData.frameCount = 0;
+
+#if defined(MEASURE_PERFORMANCE) || defined(MEASURE_QUALITY)
+    nextSaveFrame = 1;
+#endif
+
+    int width = 0, height = 0;
+    glfwGetFramebufferSize(window, &width, &height);
+    while (width == 0 || height == 0) {
+        glfwWaitEvents();
+        glfwGetFramebufferSize(window, &width, &height);
+    }
+
+    vkDeviceWaitIdle(device->getDevice());
+    cleanupSwapChain();
+
+    swapChain = std::make_unique<basalt::SwapChain>(*device, *surface, window);
+    renderPass = std::make_unique<basalt::RenderPass>(*device, swapChain->getImageFormat());
+    createStorageImage();
+    updateDescriptorSet();
+    createLightGenPipeline();
+    createComputePipeline();
+    createGraphicsPipeline();
+    swapChain->createFramebuffers(*renderPass);
+    createCommandBuffers();
+
+    ImGui_ImplVulkan_SetMinImageCount(2);
+    ImGui_ImplVulkan_Shutdown();
+
+    ImGui_ImplVulkan_InitInfo initInfo = {};
+    initInfo.Instance = instance->getInstance();
+    initInfo.PhysicalDevice = device->getPhysicalDevice();
+    initInfo.Device = device->getDevice();
+    initInfo.QueueFamily = device->getGraphicsQueueFamilyIndex();
+    initInfo.Queue = device->getGraphicsQueue();
+    initInfo.DescriptorPool = imguiDescriptorPool;
+    initInfo.RenderPass = renderPass->getRenderPass();
+    initInfo.PipelineCache = VK_NULL_HANDLE;
+    initInfo.Subpass = 0;
+    initInfo.MinImageCount = 2;
+    initInfo.ImageCount = static_cast<uint32_t>(swapChain->getFramebuffers().size());
+    initInfo.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    initInfo.Allocator = nullptr;
+    initInfo.CheckVkResultFn = nullptr;
+    ImGui_ImplVulkan_Init(&initInfo);
+    ImGui_ImplVulkan_CreateFontsTexture();
 }
 
 void VolumeApp::cleanupSwapChain() {
@@ -1314,71 +1344,16 @@ void VolumeApp::cleanup() {
     glfwDestroyWindow(window);
     glfwTerminate();
 
-    // --- ADDED/CHANGED ---
+#if defined(MEASURE_PERFORMANCE)
     if (perfLog.is_open()) {
         perfLog.close();
     }
-    // --- END OF ADDED/CHANGED ---
+#endif
 }
 
-void VolumeApp::createNanoVDBBuffer() {
-    openvdb::initialize();
-    const std::string filename = "../../../../resources/bunny_cloud.vdb";
-
-    openvdb::io::File file(filename);
-    try {
-        file.open();
-    }
-    catch (const openvdb::IoError& e) {
-        std::cerr << "Error opening file " << filename << ": " << e.what() << '\n';
-        throw std::runtime_error("Failed to open VDB file.");
-    }
-
-    openvdb::GridBase::Ptr baseGrid_openvdb;
-    openvdb::FloatGrid::Ptr grid_openvdb;
-
-    for (openvdb::io::File::NameIterator nameIter = file.beginName();
-        nameIter != file.endName(); ++nameIter) {
-        baseGrid_openvdb = file.readGrid(nameIter.gridName());
-        grid_openvdb = openvdb::gridPtrCast<openvdb::FloatGrid>(baseGrid_openvdb);
-        if (grid_openvdb) {
-            std::cout << "Loaded grid: " << nameIter.gridName() << '\n';
-            break;
-        }
-    }
-    file.close();
-
-    if (!grid_openvdb) {
-        std::cerr << "No FloatGrid found in " << filename << '\n';
-        openvdb::uninitialize();
-        throw std::runtime_error("Failed to find FloatGrid in VDB file.");
-    }
-
-    // Create NanoVDB grid
-    nanovdb::GridHandle<> handle = nanovdb::tools::createNanoGrid(*grid_openvdb);
-    const void* gridData = handle.data();
-    size_t gridSize = handle.size();
-
-    VkDeviceSize bufferSize = static_cast<VkDeviceSize>(gridSize);
-
-    nanoVDBBuffer = std::make_unique<basalt::Buffer>(
-        *device,
-        bufferSize,
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
-    basalt::Buffer stagingBuffer(
-        *device,
-        bufferSize,
-        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-    stagingBuffer.updateBuffer(*commandPool, gridData, bufferSize);
-
-    basalt::utils::copyBuffer(*device, *commandPool, device->getGraphicsQueue(),
-        stagingBuffer.getBuffer(), nanoVDBBuffer->getBuffer(), bufferSize);
-
-    openvdb::uninitialize();
+void VolumeApp::framebufferResizeCallback(GLFWwindow* wnd, int width, int height) {
+    auto app = reinterpret_cast<VolumeApp*>(glfwGetWindowUserPointer(wnd));
+    app->framebufferResized = true;
 }
 
 int main() {
